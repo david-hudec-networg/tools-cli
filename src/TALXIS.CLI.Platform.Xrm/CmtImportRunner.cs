@@ -368,6 +368,19 @@ public sealed class CmtImportRunner
 
     private void OnAddNewProgressItem(object? sender, ProgressItemEventArgs e)
     {
+        // "Processing Entity: <name>" is the first AddNewProgressItem fired by
+        // ImportCrmEntityActions.BeginEntityImport() — it fires AFTER
+        // ImportDataToCrm() has called ImportCommonMethods.ClearCrossReferanceList()
+        // (which clears LookupKeys), so this is the correct point to pre-seed the
+        // cache. Hooking on "Schema Validation Complete" fires too early — CMT wipes
+        // LookupKeys via ClearCrossReferanceList() after that event returns.
+        string message = e.progressItem?.ItemText ?? string.Empty;
+        if (message.StartsWith("Processing Entity:", StringComparison.OrdinalIgnoreCase)
+            && Interlocked.CompareExchange(ref _lookupKeysPrepopulated, 1, 0) == 0)
+        {
+            PrePopulateLookupKeysFromPackage();
+        }
+
         OnUpdateProgressItem(sender, e);
     }
 
@@ -377,17 +390,6 @@ public sealed class CmtImportRunner
             return;
 
         string message = e.progressItem.ItemText ?? string.Empty;
-
-        // CMT fires "Schema Validation Complete" once ImportDataToCrm() has
-        // parsed both data_schema.xml and data.xml and populated
-        // ImportCommonMethods.dataEntities. This is the earliest safe point to
-        // pre-seed LookupKeys, because dataEntities is null before this event.
-        if (e.progressItem.ItemStatus == ProgressItemStatus.Complete
-            && message.StartsWith("Schema Validation Complete", StringComparison.OrdinalIgnoreCase)
-            && Interlocked.CompareExchange(ref _lookupKeysPrepopulated, 1, 0) == 0)
-        {
-            PrePopulateLookupKeysFromPackage();
-        }
 
         switch (e.progressItem.ItemStatus)
         {
