@@ -40,6 +40,13 @@ public sealed class CmtImportRunner
     /// </summary>
     private int _failedStageCount;
 
+    /// <summary>
+    /// Guards the one-shot LookupKeys pre-population so it fires exactly once
+    /// when CMT fires the "Schema Validation Complete" progress event (which is
+    /// when <c>ImportCommonMethods.dataEntities</c> is first populated).
+    /// </summary>
+    private int _lookupKeysPrepopulated;
+
     public CmtImportRunner()
     {
         _assemblyMap = new Dictionary<string, Assembly>(
@@ -246,21 +253,7 @@ public sealed class CmtImportRunner
 
             _logger.LogInformation("Schema Validation Complete.");
 
-            // 8. Pre-populate LookupKeys for all package records.
-            // CMT's FindEntity() only sets record.newId when UpsertMultiple returns
-            // RecordCreated=true. For records that already exist in the target,
-            // RecordCreated=false → newId stays null → every child-entity lookup
-            // for that parent falls through to a separate server round-trip.
-            //
-            // Because CMT always preserves source GUIDs (UpsertRequest.Target.Id =
-            // source GUID), the target GUID equals the source GUID for every record
-            // in the package. Pre-seeding LookupKeys with this mapping lets
-            // FindEntity() short-circuit at the cache check (line 2851 in
-            // ImportCrmEntityActions.cs) without any server call, for both new
-            // records and records that already exist in the target.
-            PrePopulateLookupKeysFromPackage();
-
-            // 9. Import data (synchronous — blocks via internal WaitOne).
+            // 8. Import data (synchronous — blocks via internal WaitOne).
             _logger.LogInformation("Starting data import...");
             // NOTE: The deleteBeforeAdd parameter is accepted by CMT's API but
             // is never actually used internally — the delete functionality was
@@ -371,6 +364,18 @@ public sealed class CmtImportRunner
             return;
 
         string message = e.progressItem.ItemText ?? string.Empty;
+
+        // CMT fires "Schema Validation Complete" once ImportDataToCrm() has
+        // parsed both data_schema.xml and data.xml and populated
+        // ImportCommonMethods.dataEntities. This is the earliest safe point to
+        // pre-seed LookupKeys, because dataEntities is null before this event.
+        if (e.progressItem.ItemStatus == ProgressItemStatus.Complete
+            && message.StartsWith("Schema Validation Complete", StringComparison.OrdinalIgnoreCase)
+            && Interlocked.CompareExchange(ref _lookupKeysPrepopulated, 1, 0) == 0)
+        {
+            PrePopulateLookupKeysFromPackage();
+        }
+
         switch (e.progressItem.ItemStatus)
         {
             case ProgressItemStatus.Complete:
@@ -481,13 +486,16 @@ public sealed class CmtImportRunner
         try
         {
             // Locate ImportCommonMethods in the runtime-loaded CMT assembly.
-            Type? importCommonType = Type.GetType(
-                "Microsoft.Xrm.Tooling.Dmt.DataMigCommon.DataInteraction.ImportCommonMethods, Microsoft.Xrm.Tooling.Dmt.DataMigCommon",
-                throwOnError: false);
+            // Type.GetType() with assembly-qualified name often fails for Cecil-patched
+            // legacy assemblies; scan all loaded assemblies by partial name instead.
+            Type? importCommonType = AppDomain.CurrentDomain.GetAssemblies()
+                .Where(a => a.GetName().Name?.Contains("DataMigCommon", StringComparison.OrdinalIgnoreCase) == true)
+                .Select(a => a.GetType("Microsoft.Xrm.Tooling.Dmt.DataMigCommon.DataInteraction.ImportCommonMethods"))
+                .FirstOrDefault(t => t != null);
 
             if (importCommonType == null)
             {
-                _logger.LogDebug("LookupKeys pre-population skipped — ImportCommonMethods type not found");
+                _logger.LogInformation("LookupKeys pre-population skipped — ImportCommonMethods type not found in loaded assemblies");
                 return;
             }
 
@@ -497,7 +505,7 @@ public sealed class CmtImportRunner
             object? lookupKeys = lookupKeysField?.GetValue(null);
             if (lookupKeys == null)
             {
-                _logger.LogDebug("LookupKeys pre-population skipped — LookupKeys field not found or null");
+                _logger.LogInformation("LookupKeys pre-population skipped — LookupKeys field not found or null");
                 return;
             }
 
@@ -506,7 +514,7 @@ public sealed class CmtImportRunner
                 "TryAdd", [typeof(string), typeof(Guid)]);
             if (tryAdd == null)
             {
-                _logger.LogDebug("LookupKeys pre-population skipped — TryAdd method not found on LookupKeys");
+                _logger.LogInformation("LookupKeys pre-population skipped — TryAdd method not found on LookupKeys");
                 return;
             }
 
@@ -516,7 +524,7 @@ public sealed class CmtImportRunner
             object? dataEntities = dataEntitiesProp?.GetValue(null);
             if (dataEntities == null)
             {
-                _logger.LogDebug("LookupKeys pre-population skipped — dataEntities not loaded yet");
+                _logger.LogInformation("LookupKeys pre-population skipped — dataEntities not loaded yet");
                 return;
             }
 
@@ -564,7 +572,7 @@ public sealed class CmtImportRunner
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex,
+            _logger.LogInformation(ex,
                 "LookupKeys pre-population failed — import will proceed with standard CMT lookup behavior");
         }
     }
