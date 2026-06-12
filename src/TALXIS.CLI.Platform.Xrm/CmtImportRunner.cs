@@ -594,22 +594,47 @@ public sealed class CmtImportRunner
                 var recordsProp = entity.GetType().GetProperty("records");
                 if (recordsProp?.GetValue(entity) is not System.Collections.IEnumerable records) continue;
 
+                PropertyInfo? idProp = null;
+                PropertyInfo? newIdProp = null;
+
                 foreach (object? record in records)
                 {
                     if (record == null) continue;
-                    string? id = record.GetType()
-                        .GetProperty("id")?.GetValue(record) as string;
+
+                    // Cache property lookups after first record.
+                    if (idProp == null)
+                    {
+                        idProp = record.GetType().GetProperty("id");
+                        newIdProp = record.GetType().GetProperty("newId");
+                    }
+
+                    string? id = idProp?.GetValue(record) as string;
                     if (string.IsNullOrEmpty(id)) continue;
                     if (!Guid.TryParse(id, out Guid guid)) continue;
 
+                    // Strategy A: pre-seed LookupKeys so FindEntity() short-circuits
+                    // at the cache check (line 2851 of ImportCrmEntityActions.cs).
                     string key = string.Concat(entityName, ":", id);
                     tryAdd.Invoke(lookupKeys, [key, guid]);
+
+                    // Strategy B: set newId = id on the record object so that even
+                    // if the LookupKeys check misses, FindEntity() at line 2912 finds
+                    // a non-empty newId and returns without a server round-trip.
+                    // CMT preserves source GUIDs (UpsertRequest.Target.Id = source GUID),
+                    // so newId == id is always correct for package-internal references.
+                    if (newIdProp != null)
+                    {
+                        string? existingNewId = newIdProp.GetValue(record) as string;
+                        if (string.IsNullOrWhiteSpace(existingNewId))
+                            newIdProp.SetValue(record, id);
+                    }
+
                     count++;
                 }
             }
 
             _logger.LogInformation(
-                "Pre-populated LookupKeys cache with {Count} records across {EntityCount} entities — "
+                "Pre-populated LookupKeys cache and set newId for {Count} records across {EntityCount} entities — "
                 + "eliminates server lookup calls for internal package references",
                 count, entityCount);
         }
