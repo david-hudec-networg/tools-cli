@@ -47,6 +47,15 @@ public sealed class CmtImportRunner
     /// </summary>
     private int _lookupKeysPrepopulated;
 
+    /// <summary>
+    /// Runtime type of the ImportCrmDataHandler (set during RunInternalAsync).
+    /// Used by <see cref="PrePopulateLookupKeysFromPackage"/> to navigate to
+    /// the correct runtime-loaded DataMigCommon assembly, which may differ from
+    /// the net462 compile-time reference if the assembly resolver returned a
+    /// different instance.
+    /// </summary>
+    private Type? _handlerRuntimeType;
+
     public CmtImportRunner()
     {
         _assemblyMap = new Dictionary<string, Assembly>(
@@ -198,6 +207,10 @@ public sealed class CmtImportRunner
             ConfigurationManager.AppSettings["ExportFiles"] = "true";
 
             // 4. Wire progress event handlers.
+            // Capture the RUNTIME type so PrePopulateLookupKeysFromPackage can
+            // navigate to the correct DataMigCommon assembly instance (which may
+            // differ from the net462 compile-time reference).
+            _handlerRuntimeType = handler.GetType();
             handler.AddNewProgressItem += OnAddNewProgressItem;
             handler.UpdateProgressItem += OnUpdateProgressItem;
 
@@ -485,19 +498,47 @@ public sealed class CmtImportRunner
     {
         try
         {
-            // Locate ImportCommonMethods in the runtime-loaded CMT assembly.
-            // Type.GetType() with assembly-qualified name often fails for Cecil-patched
-            // legacy assemblies; scan all loaded assemblies by partial name instead.
-            Type? importCommonType = AppDomain.CurrentDomain.GetAssemblies()
-                .Where(a => a.GetName().Name?.Contains("DataMigCommon", StringComparison.OrdinalIgnoreCase) == true)
-                .Select(a => a.GetType("Microsoft.Xrm.Tooling.Dmt.DataMigCommon.DataInteraction.ImportCommonMethods"))
-                .FirstOrDefault(t => t != null);
+            // Navigate to the RUNTIME-loaded DataMigCommon assembly via the
+            // handler's type. AppDomain.GetAssemblies() may contain both the
+            // compile-time net462 copy and the runtime-loaded copy; they carry
+            // separate static state, so we must find the one CMT actually uses.
+            Type? importCommonType = null;
+            if (_handlerRuntimeType != null)
+            {
+                // Walk ImportProcessor's referenced assemblies to find DataMigCommon.
+                foreach (var asmRef in _handlerRuntimeType.Assembly.GetReferencedAssemblies())
+                {
+                    if (asmRef.Name?.Contains("DataMigCommon", StringComparison.OrdinalIgnoreCase) != true)
+                        continue;
+
+                    // Get the already-loaded instance with the same name.
+                    var loaded = AppDomain.CurrentDomain.GetAssemblies()
+                        .FirstOrDefault(a => string.Equals(a.GetName().Name, asmRef.Name, StringComparison.OrdinalIgnoreCase));
+                    if (loaded == null) continue;
+
+                    importCommonType = loaded.GetType(
+                        "Microsoft.Xrm.Tooling.Dmt.DataMigCommon.DataInteraction.ImportCommonMethods");
+                    if (importCommonType != null) break;
+                }
+            }
+
+            // Fallback: scan all loaded assemblies (less precise but still useful).
+            if (importCommonType == null)
+            {
+                importCommonType = AppDomain.CurrentDomain.GetAssemblies()
+                    .Where(a => a.GetName().Name?.Contains("DataMigCommon", StringComparison.OrdinalIgnoreCase) == true)
+                    .Select(a => a.GetType("Microsoft.Xrm.Tooling.Dmt.DataMigCommon.DataInteraction.ImportCommonMethods"))
+                    .FirstOrDefault(t => t != null);
+            }
 
             if (importCommonType == null)
             {
                 _logger.LogInformation("LookupKeys pre-population skipped — ImportCommonMethods type not found in loaded assemblies");
                 return;
             }
+
+            _logger.LogInformation("LookupKeys pre-population: using type from assembly {Assembly}",
+                importCommonType.Assembly.FullName);
 
             // Retrieve the static LookupKeys ConcurrentDictionary<string, Guid>.
             var lookupKeysField = importCommonType.GetField(
