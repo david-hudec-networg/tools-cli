@@ -42,14 +42,15 @@ public sealed class CmtImportRunner
 
     /// <summary>
     /// Guards the one-shot LookupKeys pre-population so it fires exactly once
-    /// when CMT fires the "Schema Validation Complete" progress event (which is
-    /// when <c>ImportCommonMethods.dataEntities</c> is first populated).
+    /// when CMT fires the first "Processing Entity:" progress event (which is
+    /// after <c>ImportCommonMethods.dataEntities</c> is populated and
+    /// <c>ClearCrossReferanceList()</c> has already run).
     /// </summary>
     private int _lookupKeysPrepopulated;
 
     /// <summary>
     /// Runtime type of the ImportCrmDataHandler (set during RunInternalAsync).
-    /// Used by <see cref="PrePopulateLookupKeysFromPackage"/> to navigate to
+    /// Used by <see cref="CmtLookupKeysPrepopulator"/> to navigate to
     /// the correct runtime-loaded DataMigCommon assembly, which may differ from
     /// the net462 compile-time reference if the assembly resolver returned a
     /// different instance.
@@ -378,7 +379,7 @@ public sealed class CmtImportRunner
         if (message.StartsWith("Processing Entity:", StringComparison.OrdinalIgnoreCase)
             && Interlocked.CompareExchange(ref _lookupKeysPrepopulated, 1, 0) == 0)
         {
-            PrePopulateLookupKeysFromPackage();
+            CmtLookupKeysPrepopulator.Prepopulate(_handlerRuntimeType, _logger);
         }
 
         OnUpdateProgressItem(sender, e);
@@ -462,186 +463,4 @@ public sealed class CmtImportRunner
         return null;
     }
 
-    /// <summary>
-    /// Pre-seeds <c>ImportCommonMethods.LookupKeys</c> with every record
-    /// in the loaded package so that <c>FindEntity()</c> can short-circuit the
-    /// cache lookup for internal package references without a server round-trip.
-    ///
-    /// <para>
-    /// CMT's <c>UpsertMultiple</c> handler only sets <c>record.newId</c> when
-    /// <c>RecordCreated == true</c> (line 884 of <c>ImportCrmEntityActions.cs</c>).
-    /// For records that already exist in the target (<c>RecordCreated=false</c>),
-    /// <c>newId</c> stays null, so every child-entity lookup for that parent falls
-    /// through to <c>LookupCustomerOrLookupFieldInCRM</c> — one server call per
-    /// unique lookup reference.
-    /// </para>
-    ///
-    /// <para>
-    /// Because CMT always preserves source GUIDs (the <c>UpsertRequest</c> target
-    /// entity's <c>Id</c> is set to the source record GUID), the target GUID is
-    /// always equal to the source GUID. Pre-seeding the cache with
-    /// <c>"entityName:sourceGuid" → sourceGuid</c> is therefore always correct,
-    /// regardless of whether the record is new or pre-existing in the target.
-    /// </para>
-    ///
-    /// <para>
-    /// This does not affect external lookups (entities not present in the package)
-    /// — those still resolve via the normal server call path.
-    /// </para>
-    ///
-    /// <para>
-    /// Accesses CMT internals via reflection because
-    /// <c>Microsoft.Xrm.Tooling.Dmt.DataMigCommon</c> is a net462 legacy assembly
-    /// that is patched and loaded at runtime — it is not directly referenceable
-    /// from the net10 host at compile time.
-    /// </para>
-    /// </summary>
-    private void PrePopulateLookupKeysFromPackage()
-    {
-        try
-        {
-            // Navigate to the RUNTIME-loaded DataMigCommon assembly via the
-            // handler's type. AppDomain.GetAssemblies() may contain both the
-            // compile-time net462 copy and the runtime-loaded copy; they carry
-            // separate static state, so we must find the one CMT actually uses.
-            Type? importCommonType = null;
-            if (_handlerRuntimeType != null)
-            {
-                // Walk ImportProcessor's referenced assemblies to find DataMigCommon.
-                foreach (var asmRef in _handlerRuntimeType.Assembly.GetReferencedAssemblies())
-                {
-                    if (asmRef.Name?.Contains("DataMigCommon", StringComparison.OrdinalIgnoreCase) != true)
-                        continue;
-
-                    // Get the already-loaded instance with the same name.
-                    var loaded = AppDomain.CurrentDomain.GetAssemblies()
-                        .FirstOrDefault(a => string.Equals(a.GetName().Name, asmRef.Name, StringComparison.OrdinalIgnoreCase));
-                    if (loaded == null) continue;
-
-                    importCommonType = loaded.GetType(
-                        "Microsoft.Xrm.Tooling.Dmt.DataMigCommon.DataInteraction.ImportCommonMethods");
-                    if (importCommonType != null) break;
-                }
-            }
-
-            // Fallback: scan all loaded assemblies (less precise but still useful).
-            if (importCommonType == null)
-            {
-                importCommonType = AppDomain.CurrentDomain.GetAssemblies()
-                    .Where(a => a.GetName().Name?.Contains("DataMigCommon", StringComparison.OrdinalIgnoreCase) == true)
-                    .Select(a => a.GetType("Microsoft.Xrm.Tooling.Dmt.DataMigCommon.DataInteraction.ImportCommonMethods"))
-                    .FirstOrDefault(t => t != null);
-            }
-
-            if (importCommonType == null)
-            {
-                _logger.LogInformation("LookupKeys pre-population skipped — ImportCommonMethods type not found in loaded assemblies");
-                return;
-            }
-
-            _logger.LogInformation("LookupKeys pre-population: using type from assembly {Assembly}",
-                importCommonType.Assembly.FullName);
-
-            // Retrieve the static LookupKeys ConcurrentDictionary<string, Guid>.
-            var lookupKeysField = importCommonType.GetField(
-                "LookupKeys", BindingFlags.Public | BindingFlags.Static);
-            object? lookupKeys = lookupKeysField?.GetValue(null);
-            if (lookupKeys == null)
-            {
-                _logger.LogInformation("LookupKeys pre-population skipped — LookupKeys field not found or null");
-                return;
-            }
-
-            // Get TryAdd(string, Guid) on the ConcurrentDictionary.
-            MethodInfo? tryAdd = lookupKeys.GetType().GetMethod(
-                "TryAdd", [typeof(string), typeof(Guid)]);
-            if (tryAdd == null)
-            {
-                _logger.LogInformation("LookupKeys pre-population skipped — TryAdd method not found on LookupKeys");
-                return;
-            }
-
-            // Retrieve the static dataEntities property.
-            var dataEntitiesProp = importCommonType.GetProperty(
-                "dataEntities", BindingFlags.Public | BindingFlags.Static);
-            object? dataEntities = dataEntitiesProp?.GetValue(null);
-            if (dataEntities == null)
-            {
-                _logger.LogInformation("LookupKeys pre-population skipped — dataEntities not loaded yet");
-                return;
-            }
-
-            // entities.entity → entitiesEntity[]
-            var entityArrayProp = dataEntities.GetType().GetProperty("entity");
-            if (entityArrayProp?.GetValue(dataEntities) is not System.Collections.IEnumerable entityArray)
-            {
-                _logger.LogDebug("LookupKeys pre-population skipped — entity array not found");
-                return;
-            }
-
-            int count = 0;
-            int entityCount = 0;
-            foreach (object? entity in entityArray)
-            {
-                if (entity == null) continue;
-                entityCount++;
-
-                string? entityName = entity.GetType()
-                    .GetProperty("name")?.GetValue(entity) as string;
-                if (string.IsNullOrEmpty(entityName)) continue;
-
-                // entitiesEntity.records → entitiesEntityRecord[]
-                var recordsProp = entity.GetType().GetProperty("records");
-                if (recordsProp?.GetValue(entity) is not System.Collections.IEnumerable records) continue;
-
-                PropertyInfo? idProp = null;
-                PropertyInfo? newIdProp = null;
-
-                foreach (object? record in records)
-                {
-                    if (record == null) continue;
-
-                    // Cache property lookups after first record.
-                    if (idProp == null)
-                    {
-                        idProp = record.GetType().GetProperty("id");
-                        newIdProp = record.GetType().GetProperty("newId");
-                    }
-
-                    string? id = idProp?.GetValue(record) as string;
-                    if (string.IsNullOrEmpty(id)) continue;
-                    if (!Guid.TryParse(id, out Guid guid)) continue;
-
-                    // Strategy A: pre-seed LookupKeys so FindEntity() short-circuits
-                    // at the cache check (line 2851 of ImportCrmEntityActions.cs).
-                    string key = string.Concat(entityName, ":", id);
-                    tryAdd.Invoke(lookupKeys, [key, guid]);
-
-                    // Strategy B: set newId = id on the record object so that even
-                    // if the LookupKeys check misses, FindEntity() at line 2912 finds
-                    // a non-empty newId and returns without a server round-trip.
-                    // CMT preserves source GUIDs (UpsertRequest.Target.Id = source GUID),
-                    // so newId == id is always correct for package-internal references.
-                    if (newIdProp != null)
-                    {
-                        string? existingNewId = newIdProp.GetValue(record) as string;
-                        if (string.IsNullOrWhiteSpace(existingNewId))
-                            newIdProp.SetValue(record, id);
-                    }
-
-                    count++;
-                }
-            }
-
-            _logger.LogInformation(
-                "Pre-populated LookupKeys cache and set newId for {Count} records across {EntityCount} entities — "
-                + "eliminates server lookup calls for internal package references",
-                count, entityCount);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogInformation(ex,
-                "LookupKeys pre-population failed — import will proceed with standard CMT lookup behavior");
-        }
-    }
 }
