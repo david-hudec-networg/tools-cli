@@ -45,7 +45,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TALXIS.CLI.Analyzers", "src
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TALXIS.CLI.Abstractions", "src\TALXIS.CLI.Abstractions\TALXIS.CLI.Abstractions.csproj", "{C15B8E89-AD5F-4F61-AD7B-2DAFD43B10DD}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TALXIS.CLI.Features.Tenant", "src\TALXIS.CLI.Features.Tenant\TALXIS.CLI.Features.Tenant.csproj", "{A2B6722A-967F-4A84-89A9-E5EE8CF3198C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TALXIS.CLI.Features.Security", "src\TALXIS.CLI.Features.Security\TALXIS.CLI.Features.Security.csproj", "{A2B6722A-967F-4A84-89A9-E5EE8CF3198C}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

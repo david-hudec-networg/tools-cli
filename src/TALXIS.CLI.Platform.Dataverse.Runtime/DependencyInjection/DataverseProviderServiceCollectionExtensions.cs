@@ -64,7 +64,7 @@ public static class DataverseProviderServiceCollectionExtensions
         services.AddSingleton<IPowerPlatformEnvironmentCatalog, PowerPlatformEnvironmentCatalog>();
         services.AddSingleton<IPowerPlatformEnvironmentProvisioner, PowerPlatformEnvironmentProvisioner>();
         services.AddSingleton<EnvironmentSettingsClient>();
-        services.AddSingleton<TenantRoleResolver>();
+        services.AddSingleton<SecurityRoleResolver>();
         services.AddSingleton<TALXIS.CLI.Core.Platforms.PowerPlatform.IEnvironmentSettingsService,
             EnvironmentSettingsService>();
         services.AddSingleton<TALXIS.CLI.Core.Platforms.PowerPlatform.IEnvironmentManagementService,

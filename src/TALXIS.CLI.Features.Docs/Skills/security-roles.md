@@ -89,7 +89,7 @@ roles.
      `txc environment team role remove --team .. --role ..`
    - Use `role list --user|--service-principal|--team ..` at any point to see currently assigned roles.
 
-## Tenant-Wide Admin Roles (`txc tenant ...`)
+## Tenant-Wide Admin Roles (`txc security ...`)
 
 The commands above manage access **within one environment**. A separate, tenant-wide set of
 commands manages admin-level access **across the whole tenant** — e.g. who can administer
@@ -97,17 +97,17 @@ Power Platform environments, connectors, or DLP policies tenant-wide. These comm
 create or modify anything in Entra ID — they only discover principals that already exist there
 and manage their tenant-wide admin roles.
 
-1. **Find the tenant role** — `txc tenant role list [--filter <name>]` /
-   `txc tenant role get --role <name-or-guid>`. This is the catalog every `--role` value below
+1. **Find the tenant role** — `txc security role list [--filter <name>]` /
+   `txc security role get --role <name-or-guid>`. This is the catalog every `--role` value below
    is validated against.
 2. **Find the principal:**
-   - `txc tenant service-principal list [--filter <name>]` / `txc tenant service-principal get --service-principal <client-id-or-object-id>`
-   - `txc tenant user list [--filter <upn-or-name>]` / `txc tenant user get --user <upn-or-object-id>`
+   - `txc security service-principal list [--filter <name>]` / `txc security service-principal get --service-principal <client-id-or-object-id>`
+   - `txc security user list [--filter <upn-or-name>]` / `txc security user get --user <upn-or-object-id>`
    - Groups have no `list`/`get` — see the note below.
 3. **Assign or revoke the tenant role:**
-   - `txc tenant service-principal role add --service-principal .. --role <name-or-guid>` / `role remove --service-principal .. --role ..`
-   - `txc tenant user role add --user .. --role <name-or-guid>` / `role remove --user .. --role ..`
-   - `txc tenant group role add --group <object-id> --role <name-or-guid>` /
+   - `txc security service-principal role add --service-principal .. --role <name-or-guid>` / `role remove --service-principal .. --role ..`
+   - `txc security user role add --user .. --role <name-or-guid>` / `role remove --user .. --role ..`
+   - `txc security group role add --group <object-id> --role <name-or-guid>` /
      `role remove --group <object-id> --role ..`. Unlike service principals and users, `--group` must be the
      group's Entra **object id (GUID)** — this CLI never looks groups up by display name, because
      that would require the Microsoft Graph `Group.Read.All` permission, which is not
