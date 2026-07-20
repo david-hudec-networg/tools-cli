@@ -7,6 +7,7 @@ using TALXIS.CLI.Platform.Dataverse.Runtime.Authority;
 using TALXIS.CLI.Platform.Dataverse.Runtime;
 using TALXIS.CLI.Platform.Dataverse.Runtime.Msal;
 using TALXIS.CLI.Platform.PowerPlatform.Control;
+using TALXIS.CLI.Platform.PowerPlatform.Control.Governance;
 using TALXIS.CLI.Platform.PowerPlatform.Control.Graph;
 using TALXIS.CLI.Platform.PowerPlatform.Control.PowerPlatformRbac;
 using TALXIS.CLI.Platform.PowerPlatform.Control.Strategies;
@@ -57,6 +58,8 @@ public static class DataverseProviderServiceCollectionExtensions
         services.AddSingleton<IDataverseConnectionFactory, DataverseConnectionFactory>();
         services.AddSingleton<MicrosoftGraphClient>();
         services.AddSingleton<PowerPlatformRbacClient>();
+        services.AddSingleton<PowerPlatformEnvironmentGroupClient>();
+        services.AddSingleton<IPowerPlatformEnvironmentGroupClient>(sp => sp.GetRequiredService<PowerPlatformEnvironmentGroupClient>());
         services.AddSingleton<PowerPlatformRbacRoleStrategy>();
         services.AddSingleton<BapAdminApplicationRoleStrategy>();
         services.AddSingleton<IPowerPlatformRoleAssignmentStrategy>(sp => sp.GetRequiredService<PowerPlatformRbacRoleStrategy>());

@@ -1,39 +1,55 @@
 using DotMake.CommandLine;
 using Microsoft.Extensions.Logging;
 using TALXIS.CLI.Core;
+using TALXIS.CLI.Core.Contracts.Dataverse;
+using TALXIS.CLI.Core.DependencyInjection;
+using TALXIS.CLI.Features.Security;
 using TALXIS.CLI.Logging;
 
 namespace TALXIS.CLI.Features.Security.ServicePrincipal;
 
 /// <summary>
-/// Lists tenant-wide role assignments for an Entra application.
-/// Usage: <c>txc security service-principal role list --service-principal &lt;client-id-or-object-id&gt;</c>
+/// Lists role assignments for a service principal. Without an environment scope this shows tenant admin roles only; with an environment scope it shows tenant admin roles and Dataverse environment security roles in separate sections.
+/// Usage: <c>txc security service-principal role list --service-principal &lt;client-id-or-object-id&gt; [--environment &lt;id&gt;]</c>
 /// </summary>
 [CliReadOnly]
 [CliCommand(
     Name = "list",
-    Description = "List tenant-wide role assignments for an Entra application."
+    Description = "List the service principal's tenant admin roles when no environment is resolved. When --environment is provided or the active connection already targets an environment, also list the Dataverse security roles assigned in that environment under a separate labeled section."
 )]
-public class ServicePrincipalRoleListCliCommand : ProfiledCliCommand
+public class ServicePrincipalRoleListCliCommand : SecurityScopedCliCommand
 {
     protected override ILogger Logger { get; } = TxcLoggerFactory.CreateLogger(nameof(ServicePrincipalRoleListCliCommand));
 
-    [CliOption(Name = "--service-principal", Description = "Application client ID, service principal object ID, or exact display name.", Required = true)]
+    [CliOption(Name = "--service-principal", Description = "Application client ID, service principal object ID, or exact display name. With an environment scope, a Dataverse system-user GUID is also accepted.", Required = true)]
     public string ServicePrincipal { get; set; } = null!;
 
-    protected override Task<int> ExecuteAsync() => ExecuteListRolesAsync();
-
-    private async Task<int> ExecuteListRolesAsync()
+    protected override async Task<int> ExecuteAsync()
     {
-        try
+        var scope = await SecurityPrincipalCommandSupport.ResolveScopeAsync(Profile, Environment, CancellationToken.None).ConfigureAwait(false);
+        var tenantAssignments = await ServicePrincipalCommandSupport.ListTenantAssignmentsAsync(Profile, ServicePrincipal, CancellationToken.None).ConfigureAwait(false);
+        if (!scope.HasEnvironment)
         {
-            var rows = await SecurityServicePrincipalCommandSupport.ListAssignmentsAsync(Profile, ServicePrincipal, CancellationToken.None).ConfigureAwait(false);
-            OutputFormatter.WriteList(rows, SecurityServicePrincipalCommandSupport.WriteRoleTable);
+            OutputFormatter.WriteList(tenantAssignments, SecurityPrincipalCommandSupport.WriteRoleTable);
             return ExitSuccess;
         }
-        catch (Exception ex) when (SecurityPrincipalCommandSupport.TryHandleValidationException(Logger, ex, out var exitCode))
+
+        var service = TxcServices.Get<IDataverseServicePrincipalService>();
+        var environmentAssignments = await service.ListRolesAsync(Profile, ServicePrincipal, CancellationToken.None, scope.EnvironmentId).ConfigureAwait(false);
+        var payload = new
         {
-            return exitCode;
-        }
+            tenantAdminRoles = tenantAssignments,
+            environmentId = scope.EnvironmentId,
+            environmentDisplayName = scope.EnvironmentDisplayName,
+            environmentSecurityRoles = environmentAssignments,
+        };
+
+        OutputFormatter.WriteData(payload, _ =>
+            SecurityPrincipalCommandSupport.WriteCombinedRoleSections(
+                tenantAssignments,
+                environmentAssignments,
+                scope,
+                ServicePrincipalCommandSupport.WriteEnvironmentRoleTable));
+        return ExitSuccess;
     }
 }

@@ -6,7 +6,7 @@ namespace TALXIS.CLI.Features.Security.Role;
 internal static class RoleOutput
 {
 #pragma warning disable TXC003
-    public static void PrintList(IReadOnlyList<PowerPlatformRoleDefinition> roles)
+    public static void PrintDetailList(IReadOnlyList<PowerPlatformRoleDefinition> roles)
     {
         if (roles.Count == 0)
         {

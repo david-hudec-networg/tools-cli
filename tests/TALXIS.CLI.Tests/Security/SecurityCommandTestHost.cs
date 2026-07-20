@@ -10,24 +10,23 @@ using TALXIS.CLI.Platform.PowerPlatform.Control.Strategies;
 
 namespace TALXIS.CLI.Tests.Security;
 
-/// <summary>
-/// Shared HTTP-mocked test host for tenant-scope CLI command tests
-/// (<c>txc security user</c>/<c>group</c>/<c>app</c>/<c>role</c>). Registers a
-/// <see cref="MicrosoftGraphClient"/> and <see cref="SecurityRoleResolver"/>
-/// backed by a queue of fake HTTP responses, so tests only need to supply
-/// the response bodies their command under test will request, in order.
-/// </summary>
 internal sealed class SecurityCommandTestHost : IDisposable
 {
     private readonly ServiceProvider _provider;
 
-    public SecurityCommandTestHost(Queue<Func<HttpRequestMessage, HttpResponseMessage>> handlers)
+    public SecurityCommandTestHost(
+        Queue<Func<HttpRequestMessage, HttpResponseMessage>> handlers,
+        ResolvedProfileContext? context = null,
+        Action<IServiceCollection>? configureServices = null,
+        FakePowerPlatformEnvironmentCatalog? environmentCatalog = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IConfigurationResolver>(new FixedResolver(TestContext()));
+        services.AddSingleton<IConfigurationResolver>(new FixedResolver(context ?? TestContext()));
         services.AddSingleton(_ => CreateGraphClient(handlers));
         services.AddSingleton(_ => CreateResolver(handlers));
+        services.AddSingleton<IPowerPlatformEnvironmentCatalog>(environmentCatalog ?? new FakePowerPlatformEnvironmentCatalog());
+        configureServices?.Invoke(services);
 
         _provider = services.BuildServiceProvider();
         TxcServices.Initialize(_provider);
@@ -41,6 +40,22 @@ internal sealed class SecurityCommandTestHost : IDisposable
 
     public static HttpResponseMessage JsonResponse(string json)
         => new(System.Net.HttpStatusCode.OK) { Content = new StringContent(json) };
+
+    public static ResolvedProfileContext TestContext(bool includeEnvironment = false, Guid? environmentId = null) => new(
+        new Profile { Id = "test", ConnectionRef = "conn", CredentialRef = "cred" },
+        new Connection
+        {
+            Id = "conn",
+            Provider = ProviderKind.Dataverse,
+            Cloud = CloudInstance.Public,
+            TenantId = "tenant-id",
+            EnvironmentType = EnvironmentType.Sandbox,
+            EnvironmentId = includeEnvironment ? environmentId ?? Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") : null,
+            EnvironmentUrl = includeEnvironment ? "https://contoso.crm.dynamics.com/" : null,
+            DisplayName = includeEnvironment ? "Contoso Sandbox" : null,
+        },
+        new Credential { Id = "cred", Kind = CredentialKind.InteractiveBrowser },
+        ResolutionSource.CommandLine);
 
     private static MicrosoftGraphClient CreateGraphClient(Queue<Func<HttpRequestMessage, HttpResponseMessage>> handlers)
     {
@@ -58,19 +73,6 @@ internal sealed class SecurityCommandTestHost : IDisposable
         var bap = new BapAdminApplicationRoleStrategy(new BapAdminApiClient(tokens, http));
         return new SecurityRoleResolver(graph, rbac, bap);
     }
-
-    private static ResolvedProfileContext TestContext() => new(
-        new Profile { Id = "test", ConnectionRef = "conn", CredentialRef = "cred" },
-        new Connection
-        {
-            Id = "conn",
-            Provider = ProviderKind.Dataverse,
-            Cloud = CloudInstance.Public,
-            TenantId = "tenant-id",
-            EnvironmentType = EnvironmentType.Sandbox
-        },
-        new Credential { Id = "cred", Kind = CredentialKind.InteractiveBrowser },
-        ResolutionSource.CommandLine);
 
     private sealed class FixedResolver(ResolvedProfileContext context) : IConfigurationResolver
     {
@@ -101,5 +103,19 @@ internal sealed class SecurityCommandTestHost : IDisposable
 
             return Task.FromResult(_handlers.Dequeue()(request));
         }
+    }
+
+    internal sealed class FakePowerPlatformEnvironmentCatalog : IPowerPlatformEnvironmentCatalog
+    {
+        private readonly Dictionary<Guid, PowerPlatformEnvironmentSummary> _environments = new();
+
+        public void Add(PowerPlatformEnvironmentSummary environment)
+            => _environments[environment.EnvironmentId] = environment;
+
+        public Task<IReadOnlyList<PowerPlatformEnvironmentSummary>> ListAsync(Connection connection, Credential credential, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<PowerPlatformEnvironmentSummary>>(_environments.Values.ToList());
+
+        public Task<PowerPlatformEnvironmentSummary?> TryGetByEnvironmentUrlAsync(Connection connection, Credential credential, Uri environmentUrl, CancellationToken ct)
+            => Task.FromResult(_environments.Values.SingleOrDefault(e => e.EnvironmentUrl.AbsoluteUri == environmentUrl.AbsoluteUri));
     }
 }
