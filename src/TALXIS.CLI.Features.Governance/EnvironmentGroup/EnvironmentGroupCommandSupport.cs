@@ -34,7 +34,7 @@ internal static class EnvironmentGroupCommandSupport
         {
             var byId = await client.GetAsync(connection, credential, id, ct).ConfigureAwait(false);
             if (byId is null)
-                throw new InvalidOperationException($"No environment group was found with id '{environmentGroup}'.");
+                throw new ArgumentException($"No environment group was found with id '{environmentGroup}'.");
 
             return byId;
         }
@@ -43,11 +43,11 @@ internal static class EnvironmentGroupCommandSupport
         var matches = all.Where(g => string.Equals(g.DisplayName, environmentGroup, StringComparison.OrdinalIgnoreCase)).ToList();
 
         if (matches.Count == 0)
-            throw new InvalidOperationException($"No environment group was found with display name '{environmentGroup}'.");
+            throw new ArgumentException($"No environment group was found with display name '{environmentGroup}'.");
 
         if (matches.Count > 1)
         {
-            throw new InvalidOperationException(
+            throw new ArgumentException(
                 $"Multiple environment groups match display name '{environmentGroup}': " +
                 string.Join(", ", matches.Select(m => m.Id)) +
                 ". Specify the environment group id instead.");

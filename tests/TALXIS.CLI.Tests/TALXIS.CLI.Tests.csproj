@@ -26,6 +26,7 @@
     <ProjectReference Include="../../src/TALXIS.CLI.Features.Data/TALXIS.CLI.Features.Data.csproj" />
     <ProjectReference Include="../../src/TALXIS.CLI.Features.Environment/TALXIS.CLI.Features.Environment.csproj" />
     <ProjectReference Include="../../src/TALXIS.CLI.Features.Security/TALXIS.CLI.Features.Security.csproj" />
+    <ProjectReference Include="../../src/TALXIS.CLI.Features.Governance/TALXIS.CLI.Features.Governance.csproj" />
     <ProjectReference Include="../../src/TALXIS.CLI.Features.Config/TALXIS.CLI.Features.Config.csproj" />
     <ProjectReference Include="../../src/TALXIS.CLI.Features.Workspace/TALXIS.CLI.Features.Workspace.csproj" />
     <ProjectReference Include="../../src/TALXIS.CLI.Analyzers/TALXIS.CLI.Analyzers.csproj" />
