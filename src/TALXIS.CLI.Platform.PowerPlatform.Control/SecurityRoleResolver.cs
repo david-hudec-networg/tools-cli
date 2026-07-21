@@ -180,7 +180,14 @@ public sealed class SecurityRoleResolver
         return strategy;
     }
 
-    internal async Task<PowerPlatformRolePrincipalReference> ResolvePrincipalAsync(
+    /// <summary>
+    /// Resolves a human-facing principal identifier (display name, UPN, app id,
+    /// or object id) into a concrete <see cref="PowerPlatformRolePrincipalReference"/>.
+    /// Public so other RBAC-scoped command surfaces beyond <c>txc security</c> - e.g.
+    /// <c>txc governance environment-group role</c> - can reuse the same Microsoft
+    /// Graph-backed resolution logic without duplicating it (DRY).
+    /// </summary>
+    public async Task<PowerPlatformRolePrincipalReference> ResolvePrincipalAsync(
         Connection connection,
         Credential credential,
         PowerPlatformPrincipalType principalType,
