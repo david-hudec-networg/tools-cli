@@ -39,107 +39,193 @@ public interface IPowerPlatformEnvironmentGroupRoleClient
 }
 
 /// <summary>
-/// The resource an <see cref="PowerPlatformPolicyRuleAssignment"/> targets.
+/// The resource type a policy is assigned to or a per-resource override
+/// targets. Confirmed from the official REST API reference
+/// (<c>PolicyAssignmentOverride.resourceType</c> /
+/// <c>RuleAssignment.resourceType</c>) — <c>Tenant</c> is accepted on
+/// override requests but never observed on a <c>RuleAssignment</c> response.
 /// </summary>
 public enum PowerPlatformPolicyAssignmentResourceType
 {
-    EnvironmentGroup = 0,
-    Environment = 1,
+    NotSpecified = 0,
+    EnvironmentGroup = 1,
+    Environment = 2,
+    Tenant = 3,
 }
 
 /// <summary>
-/// How a rule behaves when applied to its target resource (e.g. enforced
-/// vs. audit-only). Kept as a plain string wrapper (rather than a closed
-/// enum) because the exact set of behavior types for "Advanced Connector
-/// Policy" rules was not confirmed against a live API response as of this
-/// writing — see <c>envgroup-policy-api-investigation</c>. Do not add new
-/// named members here until that investigation confirms the real value set;
-/// pass whatever string value the target API accepts.
+/// How a per-resource assignment override behaves: whether the target
+/// resource is explicitly included or excluded from the policy it would
+/// otherwise inherit (e.g. excluding one environment from a
+/// group-wide assignment). Confirmed enum values from the official REST
+/// API reference (<c>PolicyAssignmentOverride.behaviorType</c>).
 /// </summary>
-public sealed record PowerPlatformPolicyBehaviorType(string Value)
+public enum PowerPlatformPolicyBehaviorType
 {
-    public override string ToString() => Value;
+    NotSpecified = 0,
+    Include = 1,
+    Exclude = 2,
+}
+
+/// <summary>
+/// A per-resource override supplied when assigning a policy to an
+/// environment group or environment (e.g. "assign to this group, but
+/// exclude this one member environment").
+/// </summary>
+public sealed record PowerPlatformPolicyAssignmentOverride(
+    PowerPlatformPolicyBehaviorType BehaviorType,
+    Guid ResourceId,
+    PowerPlatformPolicyAssignmentResourceType ResourceType);
+
+/// <summary>
+/// One rule set within a policy. <c>Id</c> is a type discriminator (the only
+/// confirmed value as of this writing is <c>"ConnectorManagement"</c> for the
+/// Advanced Connector Policy rule type — see
+/// <see cref="PowerPlatformAdvancedConnectorPolicyInputs"/>). <c>InputsJson</c>
+/// is kept as raw JSON rather than a closed DTO because the <c>inputs</c>
+/// shape varies per rule type and only one rule type's shape is confirmed
+/// so far; use <see cref="PowerPlatformAdvancedConnectorPolicyInputs"/> to
+/// build/parse it for <c>ConnectorManagement</c> rule sets.
+/// </summary>
+public sealed record PowerPlatformPolicyRuleSet(
+    string Id,
+    string Version,
+    string InputsJson)
+{
+    /// <summary>The only confirmed rule set type: Advanced Connector Policy.</summary>
+    public const string ConnectorManagementRuleSetId = "ConnectorManagement";
+}
+
+/// <summary>
+/// One connector's allow-list entry within an Advanced Connector Policy
+/// (<see cref="PowerPlatformPolicyRuleSet.ConnectorManagementRuleSetId"/>)
+/// rule set's <c>inputs.AllowedConnectorList</c>. Connectors NOT present in
+/// the list are blocked by default (default-deny). Field names/casing and
+/// enum values confirmed from the official Microsoft "Advanced Connector
+/// Policy programmability" tutorial.
+/// </summary>
+public sealed record PowerPlatformAllowedConnectorRule(
+    [property: System.Text.Json.Serialization.JsonPropertyName("AllowedConnector")] string AllowedConnector,
+    [property: System.Text.Json.Serialization.JsonPropertyName("AllowedActionsMode")] string AllowedActionsMode,
+    [property: System.Text.Json.Serialization.JsonPropertyName("AllowedActions")] IReadOnlyList<string>? AllowedActions,
+    [property: System.Text.Json.Serialization.JsonPropertyName("AllowedConnectionTypesMode")] string AllowedConnectionTypesMode)
+{
+    /// <summary>All actions and connection types on this connector are allowed.</summary>
+    public const string AllAllowedMode = "AllAllowed";
+
+    /// <summary>Only the actions listed in <see cref="AllowedActions"/> are allowed.</summary>
+    public const string SomeAllowedMode = "SomeAllowed";
+}
+
+/// <summary>
+/// Strongly-typed helper for building/parsing the <c>inputs</c> JSON of a
+/// <see cref="PowerPlatformPolicyRuleSet.ConnectorManagementRuleSetId"/> rule
+/// set — the only rule set type whose <c>inputs</c> shape is confirmed as of
+/// this writing (from the official ACP programmability tutorial). Other
+/// rule set types must be authored via raw <see cref="PowerPlatformPolicyRuleSet.InputsJson"/>
+/// until their shapes are confirmed.
+/// </summary>
+public sealed record PowerPlatformAdvancedConnectorPolicyInputs(
+    [property: System.Text.Json.Serialization.JsonPropertyName("AllowedConnectorList")] IReadOnlyList<PowerPlatformAllowedConnectorRule> AllowedConnectorList)
+{
+    public string ToInputsJson() => System.Text.Json.JsonSerializer.Serialize(this);
+
+    public static PowerPlatformAdvancedConnectorPolicyInputs FromInputsJson(string json)
+        => System.Text.Json.JsonSerializer.Deserialize<PowerPlatformAdvancedConnectorPolicyInputs>(json)
+            ?? throw new ArgumentException("Could not parse Advanced Connector Policy inputs JSON.", nameof(json));
 }
 
 /// <summary>
 /// A single rule-based policy — the modern governance/policy framework that
-/// is replacing classic DLP policies. Represents one policy definition
-/// (e.g. an "Advanced connector policy" rule) as returned by
-/// <c>api.powerplatform.com/governance/ruleBasedPolicies</c>.
+/// is replacing classic DLP policies. Confirmed shape from
+/// <c>api.powerplatform.com/governance/ruleBasedPolicies</c> (api-version
+/// 2024-10-01).
 /// </summary>
-/// <remarks>
-/// <see cref="RuleDefinition"/> is intentionally an untyped JSON payload
-/// (<see cref="System.Text.Json.JsonElement"/>-serializable string) rather
-/// than a strongly-typed DTO: the exact schema for "Advanced Connector
-/// Policy" rule content was not found in any research source consulted
-/// while planning this feature (Microsoft Learn REST reference, the
-/// decompiled <c>pac</c> CLI, and the public Terraform provider all target
-/// slightly different API generations). Strongly typing this prematurely
-/// risks silently dropping or misinterpreting fields once real payloads are
-/// captured. Replace this with a proper DTO once
-/// <c>envgroup-policy-api-investigation</c> confirms the real shape.
-/// </remarks>
-public sealed record PowerPlatformPolicyRule(
+public sealed record PowerPlatformPolicy(
     Guid Id,
-    string DisplayName,
-    string? Description,
-    string RuleType,
-    string RuleDefinitionJson,
-    DateTimeOffset? CreatedOn,
-    DateTimeOffset? LastModifiedOn);
+    string Name,
+    string? TenantId,
+    DateTimeOffset? LastModified,
+    int RuleSetCount,
+    IReadOnlyList<PowerPlatformPolicyRuleSet> RuleSets);
+
+/// <summary>Fields accepted when creating a rule-based policy.</summary>
+public sealed record PowerPlatformPolicyCreateOptions(
+    string Name,
+    IReadOnlyList<PowerPlatformPolicyRuleSet> RuleSets);
 
 /// <summary>
-/// Fields accepted when creating or updating a rule-based policy. See
-/// <see cref="PowerPlatformPolicyRule.RuleDefinitionJson"/> remarks on why
-/// the rule payload itself is untyped JSON at this stage.
+/// Fields accepted by the PATCH "add or update rule sets" operation. Unlike
+/// <see cref="PowerPlatformPolicyCreateOptions"/>, <see cref="RuleSets"/> is
+/// additive/merging server-side (existing rule sets not present in this list
+/// are left untouched) — there is no "full replace" (PUT) operation exposed
+/// by this client because the PATCH semantics cover every supported CLI
+/// workflow without risking accidental deletion of unrelated rule sets.
 /// </summary>
-public sealed record PowerPlatformPolicyRuleUpsertOptions(
-    string DisplayName,
-    string? Description,
-    string RuleType,
-    string RuleDefinitionJson);
+public sealed record PowerPlatformPolicyPatchOptions(
+    string? Name,
+    IReadOnlyList<PowerPlatformPolicyRuleSet>? RuleSets);
 
 /// <summary>
-/// Records that a policy rule has been assigned to an environment group or a
-/// single environment, along with the per-resource behavior override (if
-/// any) requested at assignment time.
+/// Records that a policy has been assigned to an environment group or a
+/// single environment.
 /// </summary>
-public sealed record PowerPlatformPolicyRuleAssignment(
-    Guid PolicyRuleId,
-    PowerPlatformPolicyAssignmentResourceType ResourceType,
+public sealed record PowerPlatformPolicyAssignment(
+    Guid PolicyId,
     Guid ResourceId,
-    PowerPlatformPolicyBehaviorType? BehaviorType);
+    PowerPlatformPolicyAssignmentResourceType ResourceType,
+    int RuleSetCount,
+    string? TenantId);
 
 /// <summary>
 /// Client abstraction over the rule-based-policy CRUD and assignment
-/// endpoints under <c>api.powerplatform.com/governance/ruleBasedPolicies</c>.
+/// endpoints under <c>api.powerplatform.com/governance/ruleBasedPolicies</c>
+/// (api-version 2024-10-01, confirmed from the official REST API reference).
 /// </summary>
+/// <remarks>
+/// Two operations Microsoft's own <c>pac</c>-equivalent tooling would
+/// normally offer are deliberately NOT part of this interface because the
+/// confirmed API surface (as of this writing) does not expose them:
+/// deleting a policy, and removing/unassigning a policy assignment. Only
+/// <see cref="RemoveRuleSetAsync"/> (removing one rule set from a policy) is
+/// supported. If Microsoft adds these operations, extend this interface
+/// then — do not fake them with unsupported workarounds.
+/// </remarks>
 public interface IPowerPlatformPolicyRuleClient
 {
-    Task<IReadOnlyList<PowerPlatformPolicyRule>> ListAsync(
+    Task<IReadOnlyList<PowerPlatformPolicy>> ListAsync(
         Connection connection, Credential credential, CancellationToken ct);
 
-    Task<PowerPlatformPolicyRule?> GetAsync(
-        Connection connection, Credential credential, Guid policyRuleId, CancellationToken ct);
+    Task<PowerPlatformPolicy?> GetAsync(
+        Connection connection, Credential credential, Guid policyId, CancellationToken ct);
 
-    Task<PowerPlatformPolicyRule> CreateAsync(
-        Connection connection, Credential credential, PowerPlatformPolicyRuleUpsertOptions options, CancellationToken ct);
+    Task<PowerPlatformPolicy> CreateAsync(
+        Connection connection, Credential credential, PowerPlatformPolicyCreateOptions options, CancellationToken ct);
 
-    Task<PowerPlatformPolicyRule> UpdateAsync(
-        Connection connection, Credential credential, Guid policyRuleId, PowerPlatformPolicyRuleUpsertOptions options, CancellationToken ct);
+    /// <summary>Adds or updates one or more rule sets on an existing policy (and/or renames it).</summary>
+    Task<PowerPlatformPolicy> UpdateAsync(
+        Connection connection, Credential credential, Guid policyId, PowerPlatformPolicyPatchOptions options, CancellationToken ct);
 
-    Task DeleteAsync(
-        Connection connection, Credential credential, Guid policyRuleId, CancellationToken ct);
+    /// <summary>Removes a single rule set (identified by its rule set id, e.g. "ConnectorManagement") from a policy.</summary>
+    Task<PowerPlatformPolicy> RemoveRuleSetAsync(
+        Connection connection, Credential credential, Guid policyId, string ruleSetId, CancellationToken ct);
 
-    Task<IReadOnlyList<PowerPlatformPolicyRuleAssignment>> ListAssignmentsAsync(
-        Connection connection, Credential credential, PowerPlatformPolicyAssignmentResourceType resourceType, Guid resourceId, CancellationToken ct);
+    Task<PowerPlatformPolicyAssignment> AssignToEnvironmentGroupAsync(
+        Connection connection, Credential credential, Guid policyId, Guid environmentGroupId,
+        IReadOnlyList<PowerPlatformPolicyAssignmentOverride>? overrides, CancellationToken ct);
 
-    Task AssignAsync(
-        Connection connection, Credential credential, Guid policyRuleId,
-        PowerPlatformPolicyAssignmentResourceType resourceType, Guid resourceId,
-        PowerPlatformPolicyBehaviorType? behaviorType, CancellationToken ct);
+    Task<PowerPlatformPolicyAssignment> AssignToEnvironmentAsync(
+        Connection connection, Credential credential, Guid policyId, Guid environmentId,
+        IReadOnlyList<PowerPlatformPolicyAssignmentOverride>? overrides, CancellationToken ct);
 
-    Task UnassignAsync(
-        Connection connection, Credential credential, Guid policyRuleId,
-        PowerPlatformPolicyAssignmentResourceType resourceType, Guid resourceId, CancellationToken ct);
+    /// <summary>
+    /// Lists policy assignments, optionally filtered to exactly one
+    /// dimension (policy, environment group, or environment). Pass all
+    /// nulls to list every assignment in the tenant. Specifying more than
+    /// one filter is a caller error (throws <see cref="ArgumentException"/>)
+    /// since the underlying API exposes one endpoint per filter dimension.
+    /// </summary>
+    Task<IReadOnlyList<PowerPlatformPolicyAssignment>> ListAssignmentsAsync(
+        Connection connection, Credential credential,
+        Guid? policyId, Guid? environmentGroupId, Guid? environmentId, CancellationToken ct);
 }

@@ -62,6 +62,8 @@ public static class DataverseProviderServiceCollectionExtensions
         services.AddSingleton<IPowerPlatformEnvironmentGroupClient>(sp => sp.GetRequiredService<PowerPlatformEnvironmentGroupClient>());
         services.AddSingleton<PowerPlatformEnvironmentGroupRoleClient>();
         services.AddSingleton<IPowerPlatformEnvironmentGroupRoleClient>(sp => sp.GetRequiredService<PowerPlatformEnvironmentGroupRoleClient>());
+        services.AddSingleton<PowerPlatformPolicyRuleClient>();
+        services.AddSingleton<IPowerPlatformPolicyRuleClient>(sp => sp.GetRequiredService<PowerPlatformPolicyRuleClient>());
         services.AddSingleton<PowerPlatformRbacRoleStrategy>();
         services.AddSingleton<BapAdminApplicationRoleStrategy>();
         services.AddSingleton<IPowerPlatformRoleAssignmentStrategy>(sp => sp.GetRequiredService<PowerPlatformRbacRoleStrategy>());
