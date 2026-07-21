@@ -17,6 +17,7 @@ namespace TALXIS.CLI.Features.Governance;
     Children = new[]
     {
         typeof(EnvironmentGroup.EnvironmentGroupCliCommand),
+        typeof(PolicyRule.PolicyRuleCliCommand),
     },
     ShortFormAutoGenerate = CliNameAutoGenerate.None
 )]
