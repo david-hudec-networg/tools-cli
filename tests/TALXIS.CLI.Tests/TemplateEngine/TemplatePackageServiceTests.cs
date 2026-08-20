@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.TemplateEngine.Abstractions.Installer;
 using Microsoft.TemplateEngine.Abstractions.TemplatePackage;
+using NuGet.Versioning;
 using TALXIS.CLI.Features.Workspace.TemplateEngine;
 using Xunit;
 
@@ -94,7 +95,43 @@ public class TemplatePackageServiceTests
     {
         var version = TemplatePackageService.ParsePackageVersion(new FakeManagedTemplatePackage(PackageIdentifier, "3.2.1", DateTime.UtcNow));
 
-        Assert.Equal(new Version(3, 2, 1), version);
+        Assert.Equal(NuGetVersion.Parse("3.2.1"), version);
+    }
+
+    [Fact]
+    public void ParsePackageVersion_ParsesPrereleaseVersionString()
+    {
+        // System.Version cannot parse a "-beta.1" suffix at all - it would previously return null
+        // here, silently demoting a valid, higher-precedence prerelease registration to "unparseable".
+        var version = TemplatePackageService.ParsePackageVersion(new FakeManagedTemplatePackage(PackageIdentifier, "2.0.0-beta.1", DateTime.UtcNow));
+
+        Assert.Equal(NuGetVersion.Parse("2.0.0-beta.1"), version);
+    }
+
+    [Fact]
+    public void RankCandidates_PrereleaseVersion_OutranksLowerReleaseVersion()
+    {
+        // A working 2.0.0-beta.1 registration must be probed before a working 1.0.0 registration -
+        // the whole point of "highest version wins" breaks if prerelease suffixes sort as unparseable.
+        var releaseCandidate = new FakeManagedTemplatePackage(PackageIdentifier, "1.0.0", DateTime.UtcNow);
+        var prereleaseCandidate = new FakeManagedTemplatePackage(PackageIdentifier, "2.0.0-beta.1", DateTime.UtcNow.AddDays(-10));
+
+        var ranked = TemplatePackageService.RankCandidates(new[] { releaseCandidate, prereleaseCandidate }, PackageIdentifier).ToList();
+
+        Assert.Equal(new[] { prereleaseCandidate, releaseCandidate }, ranked);
+    }
+
+    [Fact]
+    public void RankCandidates_ReleaseVersion_OutranksPrereleaseOfSameVersion()
+    {
+        // Per SemVer 2.0 precedence, a version without a prerelease suffix always outranks the same
+        // major.minor.patch with one (2.0.0 > 2.0.0-beta.1).
+        var prerelease = new FakeManagedTemplatePackage(PackageIdentifier, "2.0.0-beta.1", DateTime.UtcNow);
+        var release = new FakeManagedTemplatePackage(PackageIdentifier, "2.0.0", DateTime.UtcNow.AddDays(-10));
+
+        var ranked = TemplatePackageService.RankCandidates(new[] { prerelease, release }, PackageIdentifier).ToList();
+
+        Assert.Equal(new[] { release, prerelease }, ranked);
     }
 
     [Fact]

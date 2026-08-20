@@ -3,6 +3,7 @@ using Microsoft.TemplateEngine.Abstractions.Installer;
 using Microsoft.TemplateEngine.Abstractions.TemplatePackage;
 using Microsoft.TemplateEngine.Edge.Settings;
 using Microsoft.TemplateEngine.Edge;
+using NuGet.Versioning;
 using System.Security.Cryptography;
 using System.Diagnostics;
 
@@ -173,23 +174,31 @@ namespace TALXIS.CLI.Features.Workspace.TemplateEngine
         }
 
         /// <summary>
-        /// Parses <see cref="IManagedTemplatePackage.Version"/> as a <see cref="Version"/>, returning
+        /// Parses <see cref="IManagedTemplatePackage.Version"/> as a <see cref="NuGetVersion"/>, returning
         /// <see langword="null"/> when it is missing or not a valid version string.
         /// </summary>
-        internal static Version? ParsePackageVersion(IManagedTemplatePackage package)
+        /// <remarks>
+        /// <see cref="IManagedTemplatePackage.Version"/> is a NuGet package version, which follows SemVer
+        /// 2.0 and may carry a prerelease and/or build-metadata suffix (e.g. <c>2.0.0-beta.1</c>).
+        /// <see cref="System.Version"/> only understands dotted numeric components and rejects such
+        /// strings outright, which used to make every prerelease-versioned registration sort as if it had
+        /// no version at all. <see cref="NuGetVersion"/> parses and compares using correct NuGet/SemVer
+        /// precedence rules instead.
+        /// </remarks>
+        internal static NuGetVersion? ParsePackageVersion(IManagedTemplatePackage package)
         {
-            return Version.TryParse(package.Version, out var version) ? version : null;
+            return NuGetVersion.TryParse(package.Version, out var version) ? version : null;
         }
 
         /// <summary>
-        /// Compares nullable <see cref="Version"/> values, treating a missing/unparseable version as
+        /// Compares nullable <see cref="NuGetVersion"/> values, treating a missing/unparseable version as
         /// lower than any parsed version.
         /// </summary>
-        private sealed class NullableVersionComparer : IComparer<Version?>
+        private sealed class NullableVersionComparer : IComparer<NuGetVersion?>
         {
             public static readonly NullableVersionComparer Instance = new();
 
-            public int Compare(Version? x, Version? y)
+            public int Compare(NuGetVersion? x, NuGetVersion? y)
             {
                 if (ReferenceEquals(x, y)) return 0;
                 if (x is null) return -1;
