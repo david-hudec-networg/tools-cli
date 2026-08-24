@@ -13,7 +13,10 @@ public static class TemplateResolver
 {
     /// <summary>
     /// The tag key used in template.json to declare the component type name.
-    /// Value must match a <see cref="ComponentDefinition.Name"/> from the registry.
+    /// Value may be either the canonical <see cref="ComponentDefinition.Name"/> from the
+    /// registry (e.g. "Role") or any of its registered aliases (e.g. "SecurityRole") — both
+    /// forms are normalized through <see cref="ComponentDefinitionRegistry.GetByName"/> before
+    /// comparison, so either resolves correctly.
     /// </summary>
     public const string ComponentTypeTagKey = "componentType";
 
@@ -41,7 +44,7 @@ public static class TemplateResolver
         // 2. Match on componentType tag value, normalizing both sides through the registry
         //    (e.g. "Role" and "SecurityRole" both normalize to the same canonical name, so
         //    either input matches a template tagged with either form)
-        var canonicalInput = ComponentDefinitionRegistry.GetByName(input)?.Name ?? input;
+        var canonicalInput = Canonicalize(input);
         return templates.FirstOrDefault(t =>
             string.Equals(GetCanonicalComponentTypeName(t), canonicalInput, StringComparison.OrdinalIgnoreCase));
     }
@@ -53,7 +56,7 @@ public static class TemplateResolver
     /// </summary>
     public static IReadOnlyList<ITemplateInfo> FindAllForType(string componentTypeName, IReadOnlyList<ITemplateInfo> templates)
     {
-        var canonicalType = ComponentDefinitionRegistry.GetByName(componentTypeName)?.Name ?? componentTypeName;
+        var canonicalType = Canonicalize(componentTypeName);
         return templates
             .Where(t => string.Equals(GetCanonicalComponentTypeName(t), canonicalType, StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -67,7 +70,7 @@ public static class TemplateResolver
     /// </summary>
     public static ITemplateInfo? FindTemplateForType(string componentTypeName, IReadOnlyList<ITemplateInfo> templates)
     {
-        var canonicalType = ComponentDefinitionRegistry.GetByName(componentTypeName)?.Name ?? componentTypeName;
+        var canonicalType = Canonicalize(componentTypeName);
         return templates.FirstOrDefault(t =>
             string.Equals(GetCanonicalComponentTypeName(t), canonicalType, StringComparison.OrdinalIgnoreCase));
     }
@@ -93,6 +96,17 @@ public static class TemplateResolver
         if (raw is null)
             return null;
 
-        return ComponentDefinitionRegistry.GetByName(raw)?.Name ?? raw;
+        return Canonicalize(raw);
     }
+
+    /// <summary>
+    /// Normalizes a component type name or alias to its canonical <see cref="ComponentDefinition.Name"/>
+    /// via <see cref="ComponentDefinitionRegistry.GetByName"/>. If the value has no registry entry, it is
+    /// returned unchanged (normalization is a no-op for values like "FormTab" that aren't in the registry).
+    /// This is the single normalization rule shared by <see cref="Resolve"/>, <see cref="FindAllForType"/>,
+    /// <see cref="FindTemplateForType"/>, and <see cref="GetCanonicalComponentTypeName"/> so alias
+    /// resolution cannot drift between them.
+    /// </summary>
+    private static string Canonicalize(string value) =>
+        ComponentDefinitionRegistry.GetByName(value)?.Name ?? value;
 }
