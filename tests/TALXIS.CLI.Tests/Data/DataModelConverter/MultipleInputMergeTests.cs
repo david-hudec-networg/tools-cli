@@ -85,4 +85,15 @@ public class MultipleInputMergeTests
             .Single(r => string.Equals(r.Name, "contoso_text", System.StringComparison.OrdinalIgnoreCase));
         Assert.Equal(expected, row.MaxLenght);
     }
+
+    [Fact]
+    public void ModulesAreColouredApart_SoAMergedDiagramShowsWhereEachTableCameFrom()
+    {
+        var a = new Model.Module { ModuleName = "src/Modules.Core/Model" };
+        var b = new Model.Module { ModuleName = "Areas/Service/Project/Model" };
+
+        // Assigned through an object initializer, which runs after the constructor body —
+        // a colour computed in the constructor would be identical for both.
+        Assert.NotEqual(a.Colorhex, b.Colorhex);
+    }
 }
