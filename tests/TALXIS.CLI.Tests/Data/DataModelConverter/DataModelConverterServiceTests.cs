@@ -104,4 +104,18 @@ public class DataModelConverterServiceTests
         // RowType is deliberately left alone so each translator keeps its own handling.
         Assert.True(string.IsNullOrEmpty(row!.OptionSetName));
     }
+
+    // ---- Defect 4: output was not reproducible — colours came from new Random() --------
+
+    [Fact]
+    public void ModuleColour_IsDerivedFromName_SoConversionIsReproducible()
+    {
+        var a = new Model.Module("Areas/Service/Project/Model", new XDocument(new XElement("root")));
+        var b = new Model.Module("Areas/Service/Project/Model", new XDocument(new XElement("root")));
+        var other = new Model.Module("Areas/Environment/Start/Model", new XDocument(new XElement("root")));
+
+        Assert.Equal(a.Colorhex, b.Colorhex);
+        Assert.NotEqual(a.Colorhex, other.Colorhex);
+        Assert.Matches("^#[0-9A-F]{6}$", a.Colorhex);
+    }
 }
