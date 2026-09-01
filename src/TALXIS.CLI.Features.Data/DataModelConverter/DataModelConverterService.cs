@@ -18,7 +18,7 @@ namespace TALXIS.CLI.Features.Data.DataModelConverter;
 public class DataModelConverterService
 {
     private static readonly ILogger _logger = TxcLoggerFactory.CreateLogger(nameof(DataModelConverterService));
-    private static readonly string[] SupportedFormats = ["dbml", "sql", "edmx", "ribbon"];
+    private static readonly string[] SupportedFormats = ["dbml", "sql", "plainsql", "edmx", "ribbon"];
 
     /// <summary>
     /// Parses a Power Platform solution from a solution project folder, a declarations

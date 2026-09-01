@@ -1,4 +1,4 @@
-﻿﻿using System.IO;
+﻿using System.IO;
 using System.Linq;
 using System.Reflection;
 using DotMake.CommandLine;
@@ -178,5 +178,62 @@ public class DataModelConverterServiceTests
 
         Assert.Equal(2, navNames.Count);
         Assert.Equal(2, navNames.Distinct().Count());
+    }
+
+    // ---- Every relationship endpoint must be non-null: the translators dereference -----
+    // ---- LeftSideRow/RighSideRow without a null check. -------------------------------
+
+    [Fact]
+    public void EveryEmittedRelationship_HasBothEndpointsResolved()
+    {
+        var module = ModuleWith(
+            [Entity("account"), Entity("contoso_project", Lookup("contoso_ownerid"))],
+            [OneToMany("rel_owner", "contoso_project", "contoso_ownerid", "account")]);
+
+        var model = DataModelConverterService.ParseModules([module]);
+
+        Assert.All(model.relationships, r =>
+        {
+            Assert.NotNull(r.LeftSideTable);
+            Assert.NotNull(r.LeftSideRow);
+            Assert.NotNull(r.RighSideTable);
+            Assert.NotNull(r.RighSideRow);
+        });
+    }
+
+    // ---- Every format the CLI advertises must actually convert ------------------------
+    // plainsql was listed in the option's AllowedValues and fully implemented in the
+    // format switch, but missing from the service's SupportedFormats guard -- so it was
+    // rejected on every invocation, and the error message listed that same guard as truth.
+
+    [Fact]
+    public void EveryAdvertisedTargetFormat_IsAcceptedByTheService()
+    {
+        var advertised = typeof(DataModelConvertCliCommand)
+            .GetProperty(nameof(DataModelConvertCliCommand.TargetFormat))!
+            .GetCustomAttribute<CliOptionAttribute>()!
+            .AllowedValues!
+            .Cast<string>()
+            .ToList();
+
+        Assert.NotEmpty(advertised);
+
+        var dir = Path.Combine(Path.GetTempPath(), "txc-fmt-" + Path.GetRandomFileName());
+        var entityDir = Path.Combine(dir, "Entities", "contoso_thing");
+        Directory.CreateDirectory(entityDir);
+        File.WriteAllText(Path.Combine(entityDir, "Entity.xml"), Entity("contoso_thing").ToString());
+        try
+        {
+            foreach (var format in advertised)
+            {
+                var outFile = Path.Combine(dir, "out." + format);
+                var ex = Record.Exception(() => DataModelConverterService.ConvertModel(dir, format, outFile));
+                Assert.True(ex is null, $"--target {format} is advertised but failed: {ex?.Message}");
+            }
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 }
