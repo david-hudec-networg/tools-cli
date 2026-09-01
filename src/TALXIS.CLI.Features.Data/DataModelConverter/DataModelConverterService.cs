@@ -13,6 +13,8 @@ using TALXIS.CLI.Features.Data.DataModelConverter.Model;
 using TALXIS.CLI.Features.Data.DataModelConverter.Translators;
 using TALXIS.CLI.Logging;
 
+using TALXIS.CLI.Features.Data.DataModelConverter.AppScope;
+
 namespace TALXIS.CLI.Features.Data.DataModelConverter;
 
 public class DataModelConverterService
@@ -44,6 +46,15 @@ public class DataModelConverterService
     /// attribute differently.
     /// </summary>
     public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath)
+        => ConvertModel(inputPaths, targetFormat, outputFilePath, null, null);
+
+    /// <summary>
+    /// Converts one or more inputs into a single model, optionally narrowed to the tables a
+    /// model-driven app is built on. <paramref name="appSearchRoots"/> is where app modules
+    /// are looked for; apps and entity schema live in different modules, so this is usually
+    /// a repository root rather than a declarations folder.
+    /// </summary>
+    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName, List<string>? appSearchRoots)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
@@ -71,7 +82,13 @@ public class DataModelConverterService
             }
         }
 
-        var parsedModel = ParseModules(modules);
+        ResolvedAppScope? appScope = null;
+        if (!string.IsNullOrWhiteSpace(appUniqueName))
+        {
+            appScope = AppScopeResolver.Resolve(appSearchRoots is { Count: > 0 } ? appSearchRoots : inputPaths, appUniqueName);
+        }
+
+        var parsedModel = ParseModules(modules, appScope);
 
         var resultString = targetFormat.ToLower() switch
         {
@@ -305,6 +322,23 @@ public class DataModelConverterService
         return string.Join('/', segments.TakeLast(3));
     }
 
+    /// <summary>
+    /// Finds every declarations folder beneath a root, by looking for the entity
+    /// declarations themselves rather than for a folder name -- modules keep them under
+    /// "Declarations" or, in older ones, "CDS".
+    /// </summary>
+    public static List<string> DiscoverDeclarationFolders(string root)
+    {
+        if (!Directory.Exists(root)) throw new DirectoryNotFoundException($"Root '{root}' does not exist.");
+
+        return [.. Directory.EnumerateFiles(root, "Entity.xml", SearchOption.AllDirectories)
+            .Select(f => Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(f))))
+            .Where(d => !string.IsNullOrEmpty(d))
+            .Select(d => Path.GetFullPath(d!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(d => d, StringComparer.OrdinalIgnoreCase)];
+    }
+
     private static Module ParseFolderIntoModule(string folderPath)
     {
         Module module = new() { ModuleName = ModuleNameFor(folderPath) };
@@ -416,6 +450,9 @@ public class DataModelConverterService
     }
 
     public static ParsedModel ParseModules(List<Module> modules)
+        => ParseModules(modules, null);
+
+    public static ParsedModel ParseModules(List<Module> modules, ResolvedAppScope? appScope)
     {
 
         List<Table> EntityTables = ParseEntities(modules);
@@ -443,7 +480,27 @@ public class DataModelConverterService
             entity.SetName = entity.LogicalName;
         }
 
-        List<Relationship> EntityRelationships = ParseRelationships(modules, EntityTables);
+        // Before relationships: a table dropped here must not reappear as a stub created
+        // for a relationship that pointed at it.
+        if (appScope != null)
+        {
+            AppScopeFilter.ApplyTableScope(EntityTables, appScope);
+        }
+
+        List<Relationship> EntityRelationships = ParseRelationships(modules, EntityTables, appScope);
+
+        if (appScope != null)
+        {
+            // Option sets belonging to tables the scope removed would otherwise still be
+            // emitted, leaving more enum declarations in the output than columns using them.
+            var referenced = EntityTables
+                .SelectMany(t => t.Rows)
+                .Select(r => r.OptionSetName)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            EntityOptionSets.RemoveAll(o => !referenced.Contains(o.LocalizedName));
+        }
 
         return new ParsedModel()
         {
@@ -455,6 +512,20 @@ public class DataModelConverterService
     }
 
     public static List<Relationship> ParseRelationships(List<Module> modules, List<Table> EntityTables)
+        => ParseRelationships(modules, EntityTables, null);
+
+    private static bool IsInAppScope(XElement relationship, ResolvedAppScope appScope)
+    {
+        if (relationship.Element("EntityRelationshipType")?.Value == "ManyToMany")
+        {
+            return appScope.TableLogicalNames.Contains(relationship.Element("FirstEntityName")?.Value ?? string.Empty)
+                || appScope.TableLogicalNames.Contains(relationship.Element("SecondEntityName")?.Value ?? string.Empty);
+        }
+
+        return appScope.TableLogicalNames.Contains(relationship.Element("ReferencingEntityName")?.Value ?? string.Empty);
+    }
+
+    public static List<Relationship> ParseRelationships(List<Module> modules, List<Table> EntityTables, ResolvedAppScope? appScope)
     {
 
         List<Relationship> EntityRelationships = new();
@@ -465,6 +536,14 @@ public class DataModelConverterService
 
             foreach (var relationship in module.relationships)
             {
+                // Out of an app's scope, a relationship must be skipped rather than built:
+                // resolving one would synthesise a stub for each end, putting back the very
+                // tables the scope just removed. Kept when the referencing side is in scope,
+                // so a lookup out of the app still terminates somewhere visible.
+                if (appScope != null && !IsInAppScope(relationship, appScope))
+                {
+                    continue;
+                }
 
                 if (relationship.Element("EntityRelationshipType").Value == "ManyToMany")
                 {
