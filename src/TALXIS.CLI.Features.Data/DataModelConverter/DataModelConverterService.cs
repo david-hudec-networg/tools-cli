@@ -489,7 +489,7 @@ public class DataModelConverterService
                                                           rightSideTable,
                                                           rightSideTable.Rows.FirstOrDefault(x => x.RowType == RowType.Primarykey));
 
-                        if (EntityRelationships.FirstOrDefault(x => x.LeftSideTable == entityRelationship.LeftSideTable && x.RighSideTable == entityRelationship.RighSideTable) == default)
+                        if (EntityRelationships.FirstOrDefault(x => x.LeftSideTable == entityRelationship.LeftSideTable && x.LeftSideRow == entityRelationship.LeftSideRow && x.RighSideTable == entityRelationship.RighSideTable) == default)
                         {
                             EntityRelationships.Add(entityRelationship);
                         }
