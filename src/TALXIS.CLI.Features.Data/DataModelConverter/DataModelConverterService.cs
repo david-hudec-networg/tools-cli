@@ -55,6 +55,13 @@ public class DataModelConverterService
     /// a repository root rather than a declarations folder.
     /// </summary>
     public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName, List<string>? appSearchRoots)
+        => ConvertModel(inputPaths, targetFormat, outputFilePath, appUniqueName, appSearchRoots, false, false);
+
+    /// <summary>
+    /// <paramref name="filterColumns"/> additionally drops columns nothing in the app
+    /// refers to; <paramref name="scanCode"/> widens that search to .cs/.ts sources.
+    /// </summary>
+    public static IReadOnlyList<string> ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName, List<string>? appSearchRoots, bool filterColumns, bool scanCode)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
@@ -85,7 +92,11 @@ public class DataModelConverterService
         ResolvedAppScope? appScope = null;
         if (!string.IsNullOrWhiteSpace(appUniqueName))
         {
-            appScope = AppScopeResolver.Resolve(appSearchRoots is { Count: > 0 } ? appSearchRoots : inputPaths, appUniqueName);
+            var roots = appSearchRoots is { Count: > 0 } ? appSearchRoots : inputPaths;
+            appScope = AppScopeResolver.Resolve(roots, appUniqueName);
+            appScope.FilterColumns = filterColumns;
+            appScope.ScanCode = scanCode;
+            appScope.SearchRoots = [.. roots];
         }
 
         var parsedModel = ParseModules(modules, appScope);
@@ -99,8 +110,12 @@ public class DataModelConverterService
             _          => ConvertToDBML(parsedModel)
         };
 
-        using var writer = new StreamWriter(outputFilePath);
-        writer.Write(resultString);
+        using (var writer = new StreamWriter(outputFilePath))
+        {
+            writer.Write(resultString);
+        }
+
+        return appScope?.DroppedColumns ?? [];
     }
 
     /// <summary>
@@ -488,6 +503,13 @@ public class DataModelConverterService
         }
 
         List<Relationship> EntityRelationships = ParseRelationships(modules, EntityTables, appScope);
+
+        if (appScope is { FilterColumns: true })
+        {
+            // After relationships: the set of columns an edge depends on is only knowable
+            // once they exist.
+            AttributeReferenceFilter.Apply(EntityTables, EntityRelationships, appScope);
+        }
 
         if (appScope != null)
         {

@@ -40,6 +40,20 @@ public class DataModelConvertCliCommand : TxcLeafCommand
     public string? AppUniqueName { get; set; }
 
     [CliOption(
+        Name = "--columns-used",
+        Description = "With --app, also drop columns that no form, view, workflow or sitemap in the app refers to. A dropped column is one no reference was found for, which is not the same as one that is unused: plug-in and script sources are not searched unless --scan-code is given, and a name built at runtime cannot be found at all. Off by default.",
+        Required = false
+    )]
+    public bool FilterUnreferencedColumns { get; set; }
+
+    [CliOption(
+        Name = "--scan-code",
+        Description = "Widen --columns-used to .cs and .ts sources under the inputs. These sit outside the declarations, so plug-in and client-script references are invisible without it. Off by default.",
+        Required = false
+    )]
+    public bool ScanCode { get; set; }
+
+    [CliOption(
         Name = "--target",
         Description = "Target format for the conversion.",
         AllowedValues = new[] { "dbml", "sql", "plainsql", "edmx", "ribbon" },
@@ -57,6 +71,16 @@ public class DataModelConvertCliCommand : TxcLeafCommand
 
     protected override Task<int> ExecuteAsync()
     {
+        if (FilterUnreferencedColumns && string.IsNullOrWhiteSpace(AppUniqueName))
+        {
+            throw new ArgumentException("--columns-used narrows the columns of an app's tables, so it requires --app.");
+        }
+
+        if (ScanCode && !FilterUnreferencedColumns)
+        {
+            throw new ArgumentException("--scan-code widens the search --columns-used performs, so it requires --columns-used.");
+        }
+
         var inputPaths = new List<string>(InputPaths);
 
         foreach (var root in Roots)
@@ -92,7 +116,15 @@ public class DataModelConvertCliCommand : TxcLeafCommand
         var extension = TargetFormat!.ToLower() == "plainsql" ? "sql" : TargetFormat.ToLower();
         var outputFilePath = Path.Combine(outputDir, $"solution.{extension}");
 
-        DataModelConverterService.ConvertModel(inputPaths, TargetFormat!, outputFilePath, AppUniqueName, appSearchRoots);
+        var droppedColumns = DataModelConverterService.ConvertModel(
+            inputPaths, TargetFormat!, outputFilePath, AppUniqueName, appSearchRoots, FilterUnreferencedColumns, ScanCode);
+
+        if (droppedColumns.Count > 0)
+        {
+            Logger.LogWarning(
+                "{Count} column(s) were dropped because no reference to them was found: {Columns}",
+                droppedColumns.Count, string.Join(", ", droppedColumns));
+        }
 
         OutputFormatter.WriteResult("succeeded", $"Output written to: {outputFilePath}");
         return Task.FromResult(ExitSuccess);

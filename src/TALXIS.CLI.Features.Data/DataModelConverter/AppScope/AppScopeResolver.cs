@@ -19,6 +19,20 @@ public class ResolvedAppScope
 
     /// <summary>Every file that contributed, for reporting which sources were read.</summary>
     public List<string> SourceFiles { get; } = [];
+
+    /// <summary>Also drop columns nothing in the app refers to. Opt-in: a column with no
+    /// reference found is not the same as an unused one.</summary>
+    public bool FilterColumns { get; set; }
+
+    /// <summary>Extend the reference search to .cs/.ts sources, which sit outside the
+    /// declarations and are therefore invisible to it by default.</summary>
+    public bool ScanCode { get; set; }
+
+    /// <summary>Where to look for references. Usually repository roots.</summary>
+    public List<string> SearchRoots { get; set; } = [];
+
+    /// <summary>Columns removed, so the run can report them rather than drop them quietly.</summary>
+    public List<string> DroppedColumns { get; } = [];
 }
 
 /// <summary>
