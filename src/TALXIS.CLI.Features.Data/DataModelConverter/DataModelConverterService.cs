@@ -259,7 +259,11 @@ public class DataModelConverterService
         Module module = new();
 
         // Get files named Entity.xml in subfolders
-        var entityFiles = Directory.GetFiles(folderPath, "Entity.xml", SearchOption.AllDirectories);
+        // Ordered: Directory.GetFiles gives no ordering guarantee, so without this the
+        // table, relationship and enum order in the output varies by filesystem and the
+        // result cannot be committed or diffed.
+        var entityFiles = Directory.GetFiles(folderPath, "Entity.xml", SearchOption.AllDirectories)
+            .OrderBy(f => f, StringComparer.Ordinal).ToArray();
 
         foreach (var file in entityFiles)
         {
@@ -284,7 +288,7 @@ public class DataModelConverterService
         // Get files in folder Other/Relationships (directory may not exist in scaffolded solutions)
         var relationshipsDir = Path.Combine(folderPath, "Other", "Relationships");
         var relationshipFiles = Directory.Exists(relationshipsDir)
-            ? Directory.GetFiles(relationshipsDir, "*.xml", SearchOption.AllDirectories)
+            ? [.. Directory.GetFiles(relationshipsDir, "*.xml", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal)]
             : Array.Empty<string>();
         foreach (var file in relationshipFiles)
         {
@@ -302,7 +306,7 @@ public class DataModelConverterService
         // Get files in folder called OptionSets (directory may not exist in scaffolded solutions)
         var optionsetsDir = Path.Combine(folderPath, "OptionSets");
         var optionsetFiles = Directory.Exists(optionsetsDir)
-            ? Directory.GetFiles(optionsetsDir, "*.xml", SearchOption.AllDirectories)
+            ? [.. Directory.GetFiles(optionsetsDir, "*.xml", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal)]
             : Array.Empty<string>();
         foreach (var file in optionsetFiles)
         {
