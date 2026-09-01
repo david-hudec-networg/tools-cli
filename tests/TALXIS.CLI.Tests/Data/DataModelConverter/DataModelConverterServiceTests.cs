@@ -81,4 +81,27 @@ public class DataModelConverterServiceTests
         Assert.Contains("contoso_ownerid", toAccount);
         Assert.Contains("contoso_billtoid", toAccount);
     }
+
+    // ---- Defect 3: a column vanishes when its option set will not resolve --------------
+
+    [Fact]
+    public void PicklistWithUnresolvableOptionSet_KeepsColumnInsteadOfDroppingIt()
+    {
+        var picklist = """
+            <attribute PhysicalName="contoso_statuscode">
+              <Type>picklist</Type>
+              <OptionSetName>contoso_never_declared_anywhere</OptionSetName>
+            </attribute>
+            """;
+        var module = ModuleWith([Entity("contoso_thing", picklist)]);
+
+        var table = DataModelConverterService.ParseModules([module])
+            .tables.Single(t => t.LogicalName == "contoso_thing");
+
+        var row = table.Rows.SingleOrDefault(r => r.Name == "contoso_statuscode");
+        Assert.NotNull(row);
+        // Cleared so the column cannot reference an Enum that was never emitted;
+        // RowType is deliberately left alone so each translator keeps its own handling.
+        Assert.True(string.IsNullOrEmpty(row!.OptionSetName));
+    }
 }

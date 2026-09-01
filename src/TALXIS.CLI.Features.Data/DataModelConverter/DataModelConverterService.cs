@@ -362,15 +362,20 @@ public class DataModelConverterService
         List<Table> EntityTables = ParseEntities(modules);
         List<OptionsetEnum> EntityOptionSets = ParseOptionSets(modules);
 
-        // Remove optionset rows without optionsets defined
+        // Downgrade optionset rows whose optionset is not resolvable here (declared with no
+        // options, owned by another module, or platform-owned) rather than dropping the column.
         var validOptionSetNames = EntityOptionSets.Select(x => x.LocalizedName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var entity in EntityTables)
+        foreach (var row in EntityTables
+            .SelectMany(entity => entity.Rows)
+            .Where(row =>
+                row.RowType is (RowType.Picklist or RowType.Multiselectoptionset or RowType.State or RowType.Status or RowType.Bit)
+                && !validOptionSetNames.Contains(row.OptionSetName)))
         {
-            entity.Rows = [.. entity.Rows
-                .Where(row =>
-                    row.RowType is not (RowType.Picklist or RowType.Multiselectoptionset or RowType.State or RowType.Status or RowType.Bit)
-                    || validOptionSetNames.Contains(row.OptionSetName)
-                )];
+            // Clearing OptionSetName is enough and is all that is needed: it is what
+            // ToDbDiagramNotation prefers over RowType, so leaving it set would make the
+            // column reference an Enum that was never emitted. RowType is deliberately
+            // left alone so each translator keeps its own handling for the kind.
+            row.OptionSetName = string.Empty;
         }
 
         // Fill in setnames where missing with placeholder logical names
