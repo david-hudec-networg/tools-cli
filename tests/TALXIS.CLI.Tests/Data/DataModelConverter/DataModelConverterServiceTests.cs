@@ -119,6 +119,17 @@ public class DataModelConverterServiceTests
         Assert.Matches("^#[0-9A-F]{6}$", a.Colorhex);
     }
 
+    [Fact]
+    public void ModuleColour_FollowsANameSetByObjectInitializer()
+    {
+        var a = new Model.Module { ModuleName = "Contoso/Core/Model" };
+        var b = new Model.Module { ModuleName = "Contoso/Sales/Model" };
+
+        // An object initializer runs after the constructor body, so a colour
+        // computed in the constructor would be the same for both.
+        Assert.NotEqual(a.Colorhex, b.Colorhex);
+    }
+
     // ---- Defect 5: a self-referencing N:N emitted duplicate columns and refs -----------
 
     [Fact]

@@ -9,17 +9,12 @@ namespace TALXIS.CLI.Features.Data.DataModelConverter.Model;
 
 public class Module
 {
-    public Module()
-    {
-        Colorhex = ColourFor(ModuleName);
-    }
+    public Module() { }
 
     public Module(string module, XDocument xml)
     {
         ModuleName = module;
         XmlDoc = xml;
-
-        Colorhex = ColourFor(ModuleName);
 
         entities = XmlDoc.Descendants().Where(x => x.Name == "Entity").ToList();
         relationships = XmlDoc.Descendants().Where(x => x.Name == "EntityRelationship").ToList();
@@ -33,7 +28,10 @@ public class Module
     public List<XElement> relationships = [];
     public List<XElement> optionsets = [];
 
-    public string Colorhex { get; }
+    /// <summary>Computed, not assigned in the constructor: an object initializer sets
+    /// ModuleName after the constructor body runs, which would colour every module
+    /// from an empty name.</summary>
+    public string Colorhex => ColourFor(ModuleName);
 
     /// <summary>
     /// Derives the module colour from its name so the same input always converts to the
