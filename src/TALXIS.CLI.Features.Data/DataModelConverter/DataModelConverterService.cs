@@ -35,28 +35,43 @@ public class DataModelConverterService
     /// </list>
     /// </remarks>
     public static void ConvertModel(string inputPath, string targetFormat, string outputFilePath)
+        => ConvertModel([inputPath], targetFormat, outputFilePath);
+
+    /// <summary>
+    /// Converts one or more inputs into a single model. Each input is resolved
+    /// independently -- a solution project folder, a declarations folder, or a .zip -- and
+    /// they may be mixed. Earlier inputs take precedence where two declare the same
+    /// attribute differently.
+    /// </summary>
+    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
 
-        ParsedModel parsedModel;
+        if (inputPaths is null || inputPaths.Count == 0)
+            throw new ArgumentException("At least one input path is required.");
 
-        if (Directory.Exists(inputPath))
+        List<Module> modules = [];
+        foreach (var inputPath in inputPaths)
         {
-            var declarationsPath = ResolveDeclarationsFolder(inputPath);
-            parsedModel = ParseModelFolder(declarationsPath);
+            if (Directory.Exists(inputPath))
+            {
+                modules.Add(ParseFolderIntoModule(ResolveDeclarationsFolder(inputPath)));
+            }
+            else if (File.Exists(inputPath))
+            {
+                using var fileStream = new FileStream(inputPath, FileMode.Open, FileAccess.Read);
+                using var memoryStream = new MemoryStream();
+                fileStream.CopyTo(memoryStream);
+                modules.Add(ParseZipIntoModule(Convert.ToBase64String(memoryStream.ToArray())));
+            }
+            else
+            {
+                throw new FileNotFoundException($"Input path '{inputPath}' does not exist.");
+            }
         }
-        else if (File.Exists(inputPath))
-        {
-            using var fileStream = new FileStream(inputPath, FileMode.Open, FileAccess.Read);
-            using var memoryStream = new MemoryStream();
-            fileStream.CopyTo(memoryStream);
-            parsedModel = ParseModel(Convert.ToBase64String(memoryStream.ToArray()));
-        }
-        else
-        {
-            throw new FileNotFoundException($"Input path '{inputPath}' does not exist.");
-        }
+
+        var parsedModel = ParseModules(modules);
 
         var resultString = targetFormat.ToLower() switch
         {
@@ -255,8 +270,44 @@ public class DataModelConverterService
     }
 
     public static ParsedModel ParseModelFolder(string folderPath)
+        => ParseModelFolders([folderPath]);
+
+    /// <summary>
+    /// Parses several declarations folders into one model, merging attribute-level.
+    /// A project's model is rarely one solution: the base product ships several modules
+    /// that each declare part of a shared table, so converting them separately and
+    /// concatenating the files loses everything but the first declaration of each table.
+    /// </summary>
+    public static ParsedModel ParseModelFolders(List<string> folderPaths)
+        => ParseModules([.. folderPaths.Select(ParseFolderIntoModule)]);
+
+    /// <summary>
+    /// Names a module after the folders that own its declarations, so tables can be
+    /// attributed once several inputs are merged. Several segments are kept because the
+    /// leaf is almost always "Model" -- one segment would give every input the same name
+    /// and, with the colour derived from it, the same colour.
+    /// </summary>
+    private static string ModuleNameFor(string declarationsFolder)
     {
-        Module module = new();
+        var full = Path.GetFullPath(declarationsFolder)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var segments = full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Where(x => x.Length > 0)
+            .ToList();
+
+        // Drop the trailing "Declarations" (or "CDS") folder; it carries no information.
+        if (segments.Count > 1 && (segments[^1].Equals("Declarations", StringComparison.OrdinalIgnoreCase)
+                                   || segments[^1].Equals("CDS", StringComparison.OrdinalIgnoreCase)))
+        {
+            segments.RemoveAt(segments.Count - 1);
+        }
+
+        return string.Join('/', segments.TakeLast(3));
+    }
+
+    private static Module ParseFolderIntoModule(string folderPath)
+    {
+        Module module = new() { ModuleName = ModuleNameFor(folderPath) };
 
         // Get files named Entity.xml in subfolders
         // Ordered: Directory.GetFiles gives no ordering guarantee, so without this the
@@ -321,8 +372,24 @@ public class DataModelConverterService
             }
         }
 
-        return ParseModules([module]);
+        return module;
+    }
 
+    private static Module ParseZipIntoModule(string base64solution)
+    {
+        using ZipArchive archive = new(new MemoryStream(Convert.FromBase64String(base64solution)));
+
+        var customizationsxml = archive.Entries.FirstOrDefault(x => x.FullName.Equals("customizations.xml", StringComparison.OrdinalIgnoreCase));
+        var solutionxml = archive.Entries.FirstOrDefault(x => x.FullName.Equals("solution.xml", StringComparison.OrdinalIgnoreCase));
+
+        if (customizationsxml == null || solutionxml == null)
+        {
+            throw new FileNotFoundException("The solution archive does not contain the required customizations.xml or solution.xml files.");
+        }
+
+        return new Module(
+            XDocument.Load(solutionxml.Open()).Descendants().First(x => x.Name == "UniqueName").Value,
+            XDocument.Load(customizationsxml.Open()));
     }
 
     public static ParsedModel ParseModel(string? base64solution)
@@ -342,19 +409,7 @@ public class DataModelConverterService
 
         foreach (var solution in base64solution)
         {
-            using ZipArchive archive = new(new MemoryStream(Convert.FromBase64String(solution)));
-
-            var customizationsxml = archive.Entries.FirstOrDefault(x => x.FullName.Equals("customizations.xml", StringComparison.OrdinalIgnoreCase));
-            var solutionxml = archive.Entries.FirstOrDefault(x => x.FullName.Equals("solution.xml", StringComparison.OrdinalIgnoreCase));
-
-            if (customizationsxml == null || solutionxml == null)
-            {
-                throw new FileNotFoundException("The solution archive does not contain the required customizations.xml or solution.xml files.");
-            }
-
-            Module foundModule = new(XDocument.Load(solutionxml.Open()).Descendants().First(x => x.Name == "UniqueName").Value, XDocument.Load(customizationsxml.Open()));
-
-            modules.Add(foundModule);
+            modules.Add(ParseZipIntoModule(solution));
         }
 
         return ParseModules(modules);
