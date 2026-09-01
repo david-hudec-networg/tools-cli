@@ -118,4 +118,65 @@ public class DataModelConverterServiceTests
         Assert.NotEqual(a.Colorhex, other.Colorhex);
         Assert.Matches("^#[0-9A-F]{6}$", a.Colorhex);
     }
+
+    // ---- Defect 5: a self-referencing N:N emitted duplicate columns and refs -----------
+
+    [Fact]
+    public void SelfReferencingManyToMany_ProducesTwoDistinctIntersectColumns()
+    {
+        var manyToMany = XElement.Parse("""
+            <EntityRelationship Name="contoso_thing_thing">
+              <EntityRelationshipType>ManyToMany</EntityRelationshipType>
+              <FirstEntityName>contoso_thing</FirstEntityName>
+              <SecondEntityName>contoso_thing</SecondEntityName>
+              <IntersectEntityName>contoso_thing_thing</IntersectEntityName>
+            </EntityRelationship>
+            """);
+        var module = ModuleWith([Entity("contoso_thing")], [manyToMany]);
+
+        var model = DataModelConverterService.ParseModules([module]);
+        var intersect = model.tables.Single(t => t.LogicalName == "contoso_thing_thing");
+
+        var names = intersect.Rows.Select(r => r.Name).ToList();
+        Assert.Equal(names.Count, names.Distinct().Count());
+
+        // Two legs, each anchored on its own column — one shared column produced a
+        // duplicate endpoint pair, which a DBML parser rejects outright.
+        var legs = model.relationships.Where(r => r.RighSideTable?.LogicalName == "contoso_thing_thing").ToList();
+        Assert.Equal(2, legs.Count);
+        Assert.Equal(2, legs.Select(l => l.RighSideRow?.Name).Distinct().Count());
+
+        // The legs also need distinct relationship names: EDMX renders the intersect side
+        // as NavigationProperty Name="{relationship.Name}", with a matching Partner and
+        // NavigationPropertyBinding Path, so sharing one name emits each of them twice.
+        Assert.Equal(2, legs.Select(l => l.Name).Distinct().Count());
+    }
+
+    [Fact]
+    public void SelfReferencingManyToMany_RendersDistinctNavigationPropertiesOnTheIntersect()
+    {
+        var manyToMany = XElement.Parse("""
+            <EntityRelationship Name="contoso_thing_thing">
+              <EntityRelationshipType>ManyToMany</EntityRelationshipType>
+              <FirstEntityName>contoso_thing</FirstEntityName>
+              <SecondEntityName>contoso_thing</SecondEntityName>
+              <IntersectEntityName>contoso_thing_thing</IntersectEntityName>
+            </EntityRelationship>
+            """);
+        var module = ModuleWith([Entity("contoso_thing")], [manyToMany]);
+
+        var model = DataModelConverterService.ParseModules([module]);
+        var edmx = DataModelConverterService.ConvertToEDMX(model);
+
+        // The intersect's own EntityType carries one navigation property per leg.
+        var intersect = System.Text.RegularExpressions.Regex.Match(
+            edmx, "<EntityType Name=\"contoso_thing_thing\".*?</EntityType>",
+            System.Text.RegularExpressions.RegexOptions.Singleline).Value;
+        var navNames = System.Text.RegularExpressions.Regex
+            .Matches(intersect, "<NavigationProperty Name=\"([^\"]+)\"")
+            .Select(m => m.Groups[1].Value).ToList();
+
+        Assert.Equal(2, navNames.Count);
+        Assert.Equal(2, navNames.Distinct().Count());
+    }
 }

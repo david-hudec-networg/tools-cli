@@ -429,6 +429,21 @@ public class DataModelConverterService
 
                     var intersectEntityName = relationship.Element("IntersectEntityName").Value;
 
+                    // A self-referencing N:N resolves both sides to the same column name, which
+                    // emitted the column twice and the same Ref twice -- a DBML parser rejects
+                    // both. Dataverse keeps the real per-side names in metadata
+                    // (Entity1/Entity2IntersectAttribute) and they are author-chosen, not
+                    // derivable: the platform's own example pairs connectionroleid with
+                    // associatedconnectionroleid. Solution XML carries neither, and no intersect
+                    // entity declares its own columns, so the second side is suffixed
+                    // positionally rather than guessed.
+                    var firstRowName = firstEntityTable.LogicalName + "id";
+                    var secondRowName = secondEntityTable.LogicalName + "id";
+                    if (string.Equals(firstRowName, secondRowName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        secondRowName = secondEntityTable.LogicalName + "id2";
+                    }
+
                     var connectionTable = new Table
                     {
                         Type = TableType.ConnectionTable,
@@ -437,28 +452,39 @@ public class DataModelConverterService
                         SetName = intersectEntityName + "s",
                         Rows = {
                                 new TableRow(intersectEntityName + "id", RowType.Primarykey),
-                                new TableRow(firstEntityTable.LogicalName + "id", RowType.Lookup),
-                                new TableRow(secondEntityTable.LogicalName + "id", RowType.Lookup),
+                                new TableRow(firstRowName, RowType.Lookup),
+                                new TableRow(secondRowName, RowType.Lookup),
                             }
                     };
 
 
                     EntityTables.Add(connectionTable);
 
-                    var firstToMid = new Relationship(relationship.Attribute("Name").Value,
+                    // The second leg also needs its own name: both legs otherwise carry the
+                    // relationship name, and EDMX renders the intersect side as
+                    // NavigationProperty Name="{relationship.Name}" plus a matching Partner and
+                    // NavigationPropertyBinding Path, so a self-referencing N:N emits each of
+                    // them twice. Suffixed positionally for the same reason as the column above:
+                    // the real per-side names live in metadata and are author-chosen.
+                    var relationshipName = relationship.Attribute("Name").Value;
+                    var isSelfReferencing = string.Equals(
+                        firstEntityTable.LogicalName, secondEntityTable.LogicalName, StringComparison.OrdinalIgnoreCase);
+                    var secondRelationshipName = isSelfReferencing ? relationshipName + "_2" : relationshipName;
+
+                    var firstToMid = new Relationship(relationshipName,
                                                       "ManyToOne",
                                                       firstEntityTable,
                                                       firstEntityTable.Rows.FirstOrDefault(x => x.RowType == RowType.Primarykey),
                                                       connectionTable,
-                                                      connectionTable.Rows.FirstOrDefault(x => x.Name == firstEntityTable.LogicalName + "id"));
+                                                      connectionTable.Rows.FirstOrDefault(x => x.Name == firstRowName));
 
 
-                    var secondToMid = new Relationship(relationship.Attribute("Name").Value,
+                    var secondToMid = new Relationship(secondRelationshipName,
                                                        "ManyToOne",
                                                        secondEntityTable,
                                                        secondEntityTable.Rows.FirstOrDefault(x => x.RowType == RowType.Primarykey),
                                                        connectionTable,
-                                                       connectionTable.Rows.FirstOrDefault(x => x.Name == secondEntityTable.LogicalName + "id"));
+                                                       connectionTable.Rows.FirstOrDefault(x => x.Name == secondRowName));
 
                     EntityRelationships.Add(firstToMid);
                     EntityRelationships.Add(secondToMid);
