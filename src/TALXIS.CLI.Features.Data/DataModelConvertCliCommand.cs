@@ -1,6 +1,7 @@
-using DotMake.CommandLine;
+﻿using DotMake.CommandLine;
 using Microsoft.Extensions.Logging;
 using TALXIS.CLI.Features.Data.DataModelConverter;
+using TALXIS.CLI.Features.Data.DataModelConverter.AppScope;
 using TALXIS.CLI.Core;
 using TALXIS.CLI.Logging;
 
@@ -40,6 +41,14 @@ public class DataModelConvertCliCommand : TxcLeafCommand
     public string? AppUniqueName { get; set; }
 
     [CliOption(
+        Name = "--detail",
+        Description = "How much to emit. 'full' is everything the inputs declare. 'minimal' shows how the app was built: each table keeps only the columns its own forms, views, workflows, sitemap and .cs/.ts sources refer to, platform plumbing is dropped, and an N:N appears only when both its tables belong to the app. A dropped column is one no reference was found for, which is not the same as one that is unused: a name built at runtime cannot be found at all. 'minimal' requires --app, and is not a schema export -- use 'full' to generate SQL or EDMX for tooling.",
+        AllowedValues = new[] { "full", "minimal" },
+        Required = false
+    )]
+    public string Detail { get; set; } = "full";
+
+    [CliOption(
         Name = "--target",
         Description = "Target format for the conversion.",
         AllowedValues = new[] { "dbml", "sql", "plainsql", "edmx", "ribbon" },
@@ -57,6 +66,15 @@ public class DataModelConvertCliCommand : TxcLeafCommand
 
     protected override Task<int> ExecuteAsync()
     {
+        var detail = string.Equals(Detail, "minimal", StringComparison.OrdinalIgnoreCase)
+            ? DetailLevel.Minimal
+            : DetailLevel.Full;
+
+        if (detail == DetailLevel.Minimal && string.IsNullOrWhiteSpace(AppUniqueName))
+        {
+            throw new ArgumentException("--detail minimal narrows an app's tables to how that app uses them, so it requires --app.");
+        }
+
         var inputPaths = new List<string>(InputPaths);
 
         foreach (var root in Roots)
@@ -92,11 +110,47 @@ public class DataModelConvertCliCommand : TxcLeafCommand
         var extension = TargetFormat!.ToLower() == "plainsql" ? "sql" : TargetFormat.ToLower();
         var outputFilePath = Path.Combine(outputDir, $"solution.{extension}");
 
-        DataModelConverterService.ConvertModel(inputPaths, TargetFormat!, outputFilePath, AppUniqueName, appSearchRoots);
+        var droppedColumns = DataModelConverterService.ConvertModel(
+            inputPaths, TargetFormat!, outputFilePath, AppUniqueName, appSearchRoots, detail);
 
-        OutputFormatter.WriteResult("succeeded", $"Output written to: {outputFilePath}");
+        var summary = new ConvertSummary(
+            outputFilePath,
+            Detail.ToLowerInvariant(),
+            droppedColumns.Count,
+            [.. droppedColumns.GroupBy(c => c.Reason)
+                              .OrderBy(g => g.Key)
+                              .Select(g => new DroppedByReason(g.Key.ToString(), g.Count()))],
+            droppedColumns);
+
+        // Every dropped column in one warning is unreadable once there are thousands of
+        // them, so the full list goes to the data channel and text mode gets the counts.
+        OutputFormatter.WriteData(summary, s =>
+        {
+            OutputWriter.WriteLine($"Output written to: {s.OutputFile}");
+            foreach (var reason in s.DroppedByReason)
+            {
+                OutputWriter.WriteLine($"  dropped {reason.Count} column(s): {reason.Reason}");
+            }
+        });
+
         return Task.FromResult(ExitSuccess);
     }
+
+    /// <param name="OutputFile">Where the converted model was written.</param>
+    /// <param name="Detail">The detail level the conversion ran at.</param>
+    /// <param name="ColumnsDropped">How many columns were left out in total.</param>
+    /// <param name="DroppedByReason">Counts per reason, which is what a reader needs first.</param>
+    /// <param name="DroppedColumns">Every dropped column, for a caller that wants to check one.</param>
+    public sealed record ConvertSummary(
+        string OutputFile,
+        string Detail,
+        int ColumnsDropped,
+        IReadOnlyList<DroppedByReason> DroppedByReason,
+        IReadOnlyList<DroppedColumn> DroppedColumns);
+
+    /// <param name="Reason">Why these columns were left out.</param>
+    /// <param name="Count">How many were left out for that reason.</param>
+    public sealed record DroppedByReason(string Reason, int Count);
 
     /// <summary>
     /// Walks up for the repository that encloses a directory, so an app can be found

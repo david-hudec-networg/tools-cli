@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -19,6 +19,27 @@ public class ResolvedAppScope
 
     /// <summary>Every file that contributed, for reporting which sources were read.</summary>
     public List<string> SourceFiles { get; } = [];
+
+    /// <summary>How much metadata to emit. <see cref="DetailLevel.Minimal"/> narrows the
+    /// columns of each table to what its own artefacts refer to.</summary>
+    public DetailLevel Detail { get; set; } = DetailLevel.Full;
+
+    /// <summary>Where to look for references. Usually repository roots.</summary>
+    public List<string> SearchRoots { get; set; } = [];
+
+    /// <summary>Publisher customization prefixes of the inputs. A column carrying one was
+    /// created by an author, whatever its metadata says.</summary>
+    public HashSet<string> AuthorPrefixes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Every table any input declares, captured before app scoping removes the ones this
+    /// app does not use. A stub for a table in here is outside the app, not outside the
+    /// solution — a distinction the diagram would otherwise get wrong.
+    /// </summary>
+    public HashSet<string> AllDeclaredTableLogicalNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Columns removed, so the run can report them rather than drop them quietly.</summary>
+    public List<DroppedColumn> DroppedColumns { get; } = [];
 }
 
 /// <summary>

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -21,8 +22,18 @@ public class Module
         optionsets = XmlDoc.Descendants().Where(x => x.Name == "optionset").ToList();
     }
 
+    /// <summary>Reads the publisher prefix out of a solution manifest, from either a folder's
+    /// Other/Solution.xml or an archive's solution.xml.</summary>
+    public static string? PrefixFrom(XDocument solutionManifest) =>
+        solutionManifest.Descendants().FirstOrDefault(x => x.Name == "CustomizationPrefix")?.Value;
+
     public string ModuleName { get; set; } = "";
     public XDocument XmlDoc { get; set; } = new XDocument();
+
+    /// <summary>The publisher prefix this module's own columns carry, from its Solution.xml.
+    /// Ground truth for telling an author's column from a platform one, which the
+    /// per-attribute metadata alone gets wrong on primary keys and name fields.</summary>
+    public string? CustomizationPrefix { get; set; }
 
     public List<XElement> entities = [];
     public List<XElement> relationships = [];
@@ -37,16 +48,8 @@ public class Module
     /// Derives the module colour from its name so the same input always converts to the
     /// same bytes. A random colour made every conversion a spurious diff, which meant a
     /// generated diagram could not be committed or compared across a model change.
-    /// FNV-1a rather than string.GetHashCode, which is randomised per process on .NET Core.
+    /// Not string.GetHashCode, which is randomised per process on .NET Core.
     /// </summary>
     private static string ColourFor(string moduleName)
-    {
-        uint hash = 2166136261;
-        foreach (var c in moduleName ?? string.Empty)
-        {
-            hash ^= c;
-            hash *= 16777619;
-        }
-        return string.Format("#{0:X6}", hash & 0xFFFFFF);
-    }
+        => "#" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(moduleName ?? string.Empty)))[..6];
 }

@@ -1,4 +1,4 @@
-using TALXIS.CLI.Logging;
+﻿using TALXIS.CLI.Logging;
 using Microsoft.Extensions.Logging;
 using DocumentFormat.OpenXml.Vml.Office;
 using System.Text.Json.Serialization;
@@ -17,7 +17,14 @@ public enum TableType
 {
     InSolution = 0,
     NotInSolution = 1,
-    ConnectionTable = 2
+    ConnectionTable = 2,
+
+    /// <summary>
+    /// A stub for a table an input does declare, which is only a stub because app scoping
+    /// dropped it. Without this a diagram marks most of its stubs as missing from the
+    /// solution, which is untrue: 13 of 14 in one real app were declared in the same inputs.
+    /// </summary>
+    NotInApp = 3
 }
 
 public class Table
@@ -69,8 +76,14 @@ public class Table
             if (existing == null)
             {
                 Rows.Add(row);
+                continue;
             }
-            else if (existing.RowType != row.RowType)
+
+            // First non-null wins rather than first input: export styles differ in whether
+            // they emit this at all, so a later, more complete declaration still counts.
+            existing.IsLogical ??= row.IsLogical;
+
+            if (existing.RowType != row.RowType)
             {
                 // Several modules extending one shared table is the normal case for a
                 // layered product, so a divergent declaration warns rather than aborting.

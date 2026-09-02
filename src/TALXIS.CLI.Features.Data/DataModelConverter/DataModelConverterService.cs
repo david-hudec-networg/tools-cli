@@ -55,6 +55,14 @@ public class DataModelConverterService
     /// a repository root rather than a declarations folder.
     /// </summary>
     public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName, List<string>? appSearchRoots)
+        => ConvertModel(inputPaths, targetFormat, outputFilePath, appUniqueName, appSearchRoots, DetailLevel.Full);
+
+    /// <summary>
+    /// <paramref name="detail"/> of <see cref="DetailLevel.Minimal"/> narrows each table to
+    /// the columns its own artefacts refer to, and drops the platform plumbing a reader
+    /// never needs.
+    /// </summary>
+    public static IReadOnlyList<DroppedColumn> ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName, List<string>? appSearchRoots, DetailLevel detail)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
@@ -85,7 +93,15 @@ public class DataModelConverterService
         ResolvedAppScope? appScope = null;
         if (!string.IsNullOrWhiteSpace(appUniqueName))
         {
-            appScope = AppScopeResolver.Resolve(appSearchRoots is { Count: > 0 } ? appSearchRoots : inputPaths, appUniqueName);
+            var roots = appSearchRoots is { Count: > 0 } ? appSearchRoots : inputPaths;
+            appScope = AppScopeResolver.Resolve(roots, appUniqueName);
+            appScope.Detail = detail;
+            appScope.SearchRoots = [.. roots];
+
+            foreach (var prefix in modules.Select(m => m.CustomizationPrefix).Where(p => !string.IsNullOrWhiteSpace(p)))
+            {
+                appScope.AuthorPrefixes.Add(prefix!);
+            }
         }
 
         var parsedModel = ParseModules(modules, appScope);
@@ -99,8 +115,12 @@ public class DataModelConverterService
             _          => ConvertToDBML(parsedModel)
         };
 
-        using var writer = new StreamWriter(outputFilePath);
-        writer.Write(resultString);
+        using (var writer = new StreamWriter(outputFilePath))
+        {
+            writer.Write(resultString);
+        }
+
+        return appScope?.DroppedColumns ?? [];
     }
 
     /// <summary>
@@ -341,7 +361,11 @@ public class DataModelConverterService
 
     private static Module ParseFolderIntoModule(string folderPath)
     {
-        Module module = new() { ModuleName = ModuleNameFor(folderPath) };
+        Module module = new()
+        {
+            ModuleName = ModuleNameFor(folderPath),
+            CustomizationPrefix = PrefixFromFolder(folderPath)
+        };
 
         // Get files named Entity.xml in subfolders
         // Ordered: Directory.GetFiles gives no ordering guarantee, so without this the
@@ -421,9 +445,37 @@ public class DataModelConverterService
             throw new FileNotFoundException("The solution archive does not contain the required customizations.xml or solution.xml files.");
         }
 
+        var manifest = XDocument.Load(solutionxml.Open());
+
         return new Module(
-            XDocument.Load(solutionxml.Open()).Descendants().First(x => x.Name == "UniqueName").Value,
-            XDocument.Load(customizationsxml.Open()));
+            manifest.Descendants().First(x => x.Name == "UniqueName").Value,
+            XDocument.Load(customizationsxml.Open()))
+        {
+            CustomizationPrefix = Module.PrefixFrom(manifest)
+        };
+    }
+
+    /// <summary>
+    /// A declarations folder keeps its manifest at Other/Solution.xml, beside the
+    /// relationships this converter already reads.
+    /// </summary>
+    private static string? PrefixFromFolder(string folderPath)
+    {
+        var manifestPath = Path.Combine(folderPath, "Other", "Solution.xml");
+        if (!File.Exists(manifestPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Module.PrefixFrom(XDocument.Load(manifestPath));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read the publisher prefix from {File}", manifestPath);
+            return null;
+        }
     }
 
     public static ParsedModel ParseModel(string? base64solution)
@@ -489,6 +541,13 @@ public class DataModelConverterService
 
         List<Relationship> EntityRelationships = ParseRelationships(modules, EntityTables, appScope);
 
+        if (appScope is { Detail: DetailLevel.Minimal })
+        {
+            // After relationships: the set of columns an edge depends on is only knowable
+            // once they exist.
+            AttributeReferenceFilter.Apply(EntityTables, EntityRelationships, appScope);
+        }
+
         if (appScope != null)
         {
             // Option sets belonging to tables the scope removed would otherwise still be
@@ -514,12 +573,30 @@ public class DataModelConverterService
     public static List<Relationship> ParseRelationships(List<Module> modules, List<Table> EntityTables)
         => ParseRelationships(modules, EntityTables, null);
 
+    /// <summary>
+    /// Which kind of stub stands in for a table an edge points at. One the inputs do declare
+    /// was removed by app scoping; without app scoping every stub is genuinely absent.
+    /// </summary>
+    private static TableType StubTypeFor(ResolvedAppScope? appScope, string logicalName)
+        => appScope?.AllDeclaredTableLogicalNames.Contains(logicalName) == true
+            ? TableType.NotInApp
+            : TableType.NotInSolution;
+
     private static bool IsInAppScope(XElement relationship, ResolvedAppScope appScope)
     {
         if (relationship.Element("EntityRelationshipType")?.Value == "ManyToMany")
         {
-            return appScope.TableLogicalNames.Contains(relationship.Element("FirstEntityName")?.Value ?? string.Empty)
-                || appScope.TableLogicalNames.Contains(relationship.Element("SecondEntityName")?.Value ?? string.Empty);
+            var firstInScope = appScope.TableLogicalNames.Contains(relationship.Element("FirstEntityName")?.Value ?? string.Empty);
+            var secondInScope = appScope.TableLogicalNames.Contains(relationship.Element("SecondEntityName")?.Value ?? string.Empty);
+
+            // An N:N is part of an app's own design only when both its tables are. Admitting
+            // it on one side drags a shared table's whole association network in: systemuser
+            // alone contributed nine intersects and four far-side stubs to one real app.
+            // This gate is read before the branch that builds those tables, so tightening it
+            // withholds the tables and the edge together rather than leaving a dangling end.
+            return appScope.Detail == DetailLevel.Minimal
+                ? firstInScope && secondInScope
+                : firstInScope || secondInScope;
         }
 
         return appScope.TableLogicalNames.Contains(relationship.Element("ReferencingEntityName")?.Value ?? string.Empty);
@@ -550,14 +627,14 @@ public class DataModelConverterService
                     var firstEntityTable = EntityTables.Find(relationship.Element("FirstEntityName").Value);
                     if (firstEntityTable == null)
                     {
-                        firstEntityTable = TableExtension.CreateTable(relationship.Element("FirstEntityName").Value, TableType.NotInSolution);
+                        firstEntityTable = TableExtension.CreateTable(relationship.Element("FirstEntityName").Value, StubTypeFor(appScope, relationship.Element("FirstEntityName").Value));
                         EntityTables.Add(firstEntityTable);
                     }
 
                     var secondEntityTable = EntityTables.Find(relationship.Element("SecondEntityName").Value);
                     if (secondEntityTable == null)
                     {
-                        secondEntityTable = TableExtension.CreateTable(relationship.Element("SecondEntityName").Value, TableType.NotInSolution);
+                        secondEntityTable = TableExtension.CreateTable(relationship.Element("SecondEntityName").Value, StubTypeFor(appScope, relationship.Element("SecondEntityName").Value));
                         EntityTables.Add(secondEntityTable);
                     }
 
@@ -571,12 +648,10 @@ public class DataModelConverterService
                     // associatedconnectionroleid. Solution XML carries neither, and no intersect
                     // entity declares its own columns, so the second side is suffixed
                     // positionally rather than guessed.
+                    var isSelfReferencing = string.Equals(
+                        firstEntityTable.LogicalName, secondEntityTable.LogicalName, StringComparison.OrdinalIgnoreCase);
                     var firstRowName = firstEntityTable.LogicalName + "id";
-                    var secondRowName = secondEntityTable.LogicalName + "id";
-                    if (string.Equals(firstRowName, secondRowName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        secondRowName = secondEntityTable.LogicalName + "id2";
-                    }
+                    var secondRowName = secondEntityTable.LogicalName + (isSelfReferencing ? "id2" : "id");
 
                     var connectionTable = new Table
                     {
@@ -601,8 +676,6 @@ public class DataModelConverterService
                     // them twice. Suffixed positionally for the same reason as the column above:
                     // the real per-side names live in metadata and are author-chosen.
                     var relationshipName = relationship.Attribute("Name").Value;
-                    var isSelfReferencing = string.Equals(
-                        firstEntityTable.LogicalName, secondEntityTable.LogicalName, StringComparison.OrdinalIgnoreCase);
                     var secondRelationshipName = isSelfReferencing ? relationshipName + "_2" : relationshipName;
 
                     var firstToMid = new Relationship(relationshipName,
@@ -632,7 +705,7 @@ public class DataModelConverterService
 
                         if (missingEntityLogicalName != "FileAttachment")
                         {
-                            leftSideTable = TableExtension.CreateTable(missingEntityLogicalName, TableType.NotInSolution);
+                            leftSideTable = TableExtension.CreateTable(missingEntityLogicalName, StubTypeFor(appScope, missingEntityLogicalName));
                             EntityTables.Add(leftSideTable);
                         }
                     }
@@ -644,7 +717,7 @@ public class DataModelConverterService
 
                         if (missingEntityLogicalName != "FileAttachment")
                         {
-                            rightSideTable = TableExtension.CreateTable(missingEntityLogicalName, TableType.NotInSolution);
+                            rightSideTable = TableExtension.CreateTable(missingEntityLogicalName, StubTypeFor(appScope, missingEntityLogicalName));
                             EntityTables.Add(rightSideTable);
                         }
                     }

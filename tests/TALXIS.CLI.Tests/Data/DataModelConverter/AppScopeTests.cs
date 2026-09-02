@@ -194,7 +194,10 @@ public class AppScopeTests : IDisposable
         var model = DataModelConverterService.ParseModules([module], scope);
 
         Assert.Contains(model.relationships, r => r.LeftSideTable?.LogicalName == "contoso_inapp");
-        Assert.Contains(model.tables, t => t.LogicalName == "contoso_outside" && t.Type == Model.TableType.NotInSolution);
+
+        // NotInApp rather than NotInSolution: this input does declare the table, so it is
+        // outside the app rather than missing from the solution.
+        Assert.Contains(model.tables, t => t.LogicalName == "contoso_outside" && t.Type == Model.TableType.NotInApp);
     }
 
     [Fact]
