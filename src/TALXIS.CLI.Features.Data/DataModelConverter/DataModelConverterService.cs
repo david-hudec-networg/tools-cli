@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -604,12 +604,10 @@ public class DataModelConverterService
 
             foreach (var entityXmlElement in module.entities)
             {
-                var entityTable = new Table();
+                var entityTable = EntityTables.Find(entityXmlElement.Element("Name")!.Value);
 
-                if (EntityTables.FirstOrDefault(x => x.LogicalName == entityXmlElement.Element("Name")?.Value) != default)
+                if (entityTable != null)
                 {
-                    entityTable = EntityTables.FirstOrDefault(x => x.LogicalName == entityXmlElement.Element("Name")?.Value);
-
                     if (string.IsNullOrEmpty(entityTable.SetName))
                     {
                         entityTable.SetName = entityXmlElement.Elements("EntityInfo").Elements("entity").Elements("EntitySetName").ToList().Count != 0 ? entityXmlElement.Elements("EntityInfo").Elements("entity").Elements("EntitySetName").FirstOrDefault()?.Value : string.Empty;
@@ -634,14 +632,13 @@ public class DataModelConverterService
                 var attributeXElements = entityXmlElement.Elements("EntityInfo").Elements("entity").Elements("attributes").Elements("attribute").ToList();
 
                 entityTable.ParseMultipleRowsFromXml(attributeXElements);
-
-                if (!entityTable.Rows.Any(x => x.RowType == RowType.Primarykey))
-                {
-                    entityTable.Rows.Add(new TableRow(entityTable.LogicalName + "id", RowType.Primarykey));
-                }
-
             }
 
+        }
+
+        foreach (var entityTable in EntityTables.Where(table => !table.Rows.Any(x => x.RowType == RowType.Primarykey)))
+        {
+            entityTable.Rows.Add(new TableRow(entityTable.LogicalName + "id", RowType.Primarykey));
         }
 
         return EntityTables;
