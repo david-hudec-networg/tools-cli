@@ -429,6 +429,11 @@ public class DataModelConverterService
 
                     var intersectEntityName = relationship.Element("IntersectEntityName").Value;
 
+                    if (EntityTables.Any(x => x.Type == TableType.ConnectionTable && string.Equals(x.LogicalName, intersectEntityName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
                     // A self-referencing N:N resolves both sides to the same column name, which
                     // emitted the column twice and the same Ref twice -- a DBML parser rejects
                     // both. Dataverse keeps the real per-side names in metadata

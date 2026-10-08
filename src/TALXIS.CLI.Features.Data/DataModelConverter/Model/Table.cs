@@ -91,6 +91,7 @@ public class Table
 
         if (ribbonDiff != null)
         {
+            root.RemoveDeclaredIn(ribbonDiff);
             ribbonDiff.Merge(root);
         }
         else

@@ -48,6 +48,39 @@ public class MultipleInputMergeTests
         return module;
     }
 
+    private static Model.Module WithRelationships(Model.Module module, params XElement[] relationships)
+    {
+        module.relationships.AddRange(relationships);
+        return module;
+    }
+
+    private static XElement ManyToMany(string name, string first, string second) =>
+        XElement.Parse($"""
+            <EntityRelationship Name="{name}">
+              <EntityRelationshipType>ManyToMany</EntityRelationshipType>
+              <FirstEntityName>{first}</FirstEntityName>
+              <SecondEntityName>{second}</SecondEntityName>
+              <IntersectEntityName>{name}</IntersectEntityName>
+            </EntityRelationship>
+            """);
+
+    private static XElement WithRibbon(XElement entity, params string[] actionIds)
+    {
+        var actions = string.Join("", actionIds.Select(id => $"""<CustomAction Id="{id}" Location="contoso.Location" Sequence="10" />"""));
+        entity.Add(XElement.Parse($"""
+            <RibbonDiffXml>
+              <CustomActions>{actions}</CustomActions>
+              <CommandDefinitions><CommandDefinition Id="contoso.Command" /></CommandDefinitions>
+              <RuleDefinitions><EnableRules><EnableRule Id="contoso.Rule" /></EnableRules></RuleDefinitions>
+              <LocLabels><LocLabel Id="contoso.Label"><Titles><Title description="Open" languagecode="1033" /></Titles></LocLabel></LocLabels>
+            </RibbonDiffXml>
+            """));
+        return entity;
+    }
+
+    private static int Occurrences(string text, string fragment) =>
+        text.Split(fragment).Length - 1;
+
     [Fact]
     public void TablesNamedDifferentlyOnlyInCase_MergeIntoOneTable()
     {
@@ -152,5 +185,52 @@ public class MultipleInputMergeTests
         var optionSet = Assert.Single(model.optionSets);
         Assert.Equal(expected, optionSet.Values.Single(v => v.Value == 1).Label);
         Assert.Contains(optionSet.Values, v => v.Value == 2);
+    }
+
+    [Fact]
+    public void ManyToManyDeclaredByTwoModules_YieldsOneIntersectTable()
+    {
+        var link = ManyToMany("contoso_a_b", "contoso_a", "contoso_b");
+
+        var model = DataModelConverterService.ParseModules(
+        [
+            WithRelationships(ModuleOf("base", Entity("contoso_a"), Entity("contoso_b")), link),
+            WithRelationships(ModuleOf("layer", Entity("contoso_a"), Entity("contoso_b")), link),
+        ]);
+
+        Assert.Single(model.tables, t => t.LogicalName == "contoso_a_b");
+        Assert.Equal(2, model.relationships.Count(r => r.RighSideTable.LogicalName == "contoso_a_b"));
+    }
+
+    [Fact]
+    public void RibbonItemsDeclaredByTwoModules_AreEmittedOnce()
+    {
+        var model = DataModelConverterService.ParseModules(
+        [
+            ModuleOf("base", WithRibbon(Entity("contoso_thing"), "contoso.Action")),
+            ModuleOf("layer", WithRibbon(Entity("contoso_thing"), "contoso.Action", "contoso.Extra")),
+        ]);
+
+        var ribbon = DataModelConverterService.ConvertToRibbonDiff(model);
+
+        Assert.Equal(1, Occurrences(ribbon, "<CustomAction Id=\"contoso.Action\""));
+        Assert.Equal(1, Occurrences(ribbon, "<CustomAction Id=\"contoso.Extra\""));
+        Assert.Equal(1, Occurrences(ribbon, "<CommandDefinition Id=\"contoso.Command\""));
+        Assert.Equal(1, Occurrences(ribbon, "<EnableRule Id=\"contoso.Rule\""));
+        Assert.Equal(1, Occurrences(ribbon, "<LocLabel Id=\"contoso.Label\""));
+    }
+
+    [Fact]
+    public void TheSameRibbonActionIdOnDifferentTables_IsKeptForBoth()
+    {
+        var model = DataModelConverterService.ParseModules(
+        [
+            ModuleOf("base", WithRibbon(Entity("contoso_a"), "contoso.Shared")),
+            ModuleOf("layer", WithRibbon(Entity("contoso_b"), "contoso.Shared")),
+        ]);
+
+        var ribbon = DataModelConverterService.ConvertToRibbonDiff(model);
+
+        Assert.Equal(2, Occurrences(ribbon, "<CustomAction Id=\"contoso.Shared\""));
     }
 }
