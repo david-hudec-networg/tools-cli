@@ -83,4 +83,42 @@ public class MultipleInputMergeTests
         var key = Assert.Single(Assert.Single(model.tables).Rows, r => r.RowType == Model.RowType.Primarykey);
         Assert.Equal("contoso_thingid", key.Name);
     }
+
+    [Fact]
+    public void TableIsCreditedToTheModuleDeclaringMostOfItsAttributes()
+    {
+        var model = DataModelConverterService.ParseModules(
+        [
+            ModuleOf("apps", Entity("contoso_thing")),
+            ModuleOf("extension", Entity("contoso_thing", Attr("contoso_x", "int"))),
+            ModuleOf("model", Entity("contoso_thing", Attr("contoso_a", "int"), Attr("contoso_b", "int"), Attr("contoso_c", "int"))),
+        ]);
+
+        Assert.Equal("model", Assert.Single(model.tables).ParentModule.ModuleName);
+        Assert.Contains("//model", DataModelConverterService.ConvertToDBML(model));
+    }
+
+    [Fact]
+    public void ModulesDeclaringEquallyManyAttributes_CreditTheEarlierOne()
+    {
+        var model = DataModelConverterService.ParseModules(
+        [
+            ModuleOf("first", Entity("contoso_thing", Attr("contoso_a", "int"))),
+            ModuleOf("second", Entity("contoso_thing", Attr("contoso_b", "int"))),
+        ]);
+
+        Assert.Equal("first", Assert.Single(model.tables).ParentModule.ModuleName);
+    }
+
+    [Fact]
+    public void TableNoModuleGivesAttributes_IsCreditedToTheFirstModuleDeclaringIt()
+    {
+        var model = DataModelConverterService.ParseModules(
+        [
+            ModuleOf("first", Entity("contoso_thing")),
+            ModuleOf("second", Entity("contoso_thing")),
+        ]);
+
+        Assert.Equal("first", Assert.Single(model.tables).ParentModule.ModuleName);
+    }
 }

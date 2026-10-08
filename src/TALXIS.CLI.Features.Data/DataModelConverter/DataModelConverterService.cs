@@ -597,6 +597,7 @@ public class DataModelConverterService
     {
 
         var EntityTables = new List<Table>();
+        var declaredAttributes = new Dictionary<Table, int>();
 
         foreach (var module in modules)
         {
@@ -632,6 +633,12 @@ public class DataModelConverterService
                 var attributeXElements = entityXmlElement.Elements("EntityInfo").Elements("entity").Elements("attributes").Elements("attribute").ToList();
 
                 entityTable.ParseMultipleRowsFromXml(attributeXElements);
+
+                if (attributeXElements.Count > declaredAttributes.GetValueOrDefault(entityTable))
+                {
+                    entityTable.ParentModule = module;
+                    declaredAttributes[entityTable] = attributeXElements.Count;
+                }
             }
 
         }
