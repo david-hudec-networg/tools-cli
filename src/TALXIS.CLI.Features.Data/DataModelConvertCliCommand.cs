@@ -41,7 +41,7 @@ public class DataModelConvertCliCommand : TxcLeafCommand
 
     [CliOption(
         Name = "--detail",
-        Description = "'full' emits everything the inputs declare; 'minimal' keeps the columns that any form, view, workflow, chart, sitemap or .cs, .ts or .js file under --root (or under the inputs) refers to, plus keys, state columns and relationship columns. 'minimal' drops platform plumbing and requires --app and --target dbml.",
+        Description = "'full' emits everything the inputs declare; 'minimal' keeps the columns that any form, view, workflow, chart, sitemap or .cs, .ts or .js file under --root (or under the inputs) refers to, plus keys, state columns and relationship columns. 'minimal' drops platform plumbing, keeps an N:N only between tables of the app, and requires --app and --target dbml.",
         AllowedValues = new[] { "full", "minimal" },
         Required = false
     )]

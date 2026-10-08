@@ -537,8 +537,10 @@ public class DataModelConverterService
     {
         if (relationship.Element("EntityRelationshipType")?.Value == "ManyToMany")
         {
-            return appScope.TableLogicalNames.Contains(relationship.Element("FirstEntityName")?.Value ?? string.Empty)
-                || appScope.TableLogicalNames.Contains(relationship.Element("SecondEntityName")?.Value ?? string.Empty);
+            var firstInScope = appScope.TableLogicalNames.Contains(relationship.Element("FirstEntityName")?.Value ?? string.Empty);
+            var secondInScope = appScope.TableLogicalNames.Contains(relationship.Element("SecondEntityName")?.Value ?? string.Empty);
+
+            return appScope.Detail == DetailLevel.Minimal ? firstInScope && secondInScope : firstInScope || secondInScope;
         }
 
         return appScope.TableLogicalNames.Contains(relationship.Element("ReferencingEntityName")?.Value ?? string.Empty);
