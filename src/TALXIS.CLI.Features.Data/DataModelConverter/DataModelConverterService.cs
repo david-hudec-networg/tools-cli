@@ -31,8 +31,8 @@ public class DataModelConverterService
     /// under the inputs when none are given. <paramref name="includeAttributes"/> keeps only
     /// the columns matching one of its patterns, plus keys and the columns relationships use.
     /// <paramref name="detail"/> of <see cref="DetailLevel.Minimal"/> narrows each table of the
-    /// app to the columns that files under the search roots refer to, and the columns it left
-    /// out are returned.
+    /// app to the columns that files under the search roots refer to and returns the columns it
+    /// left out; the columns <paramref name="includeAttributes"/> names are then kept as well.
     /// </summary>
     /// <remarks>
     /// Input resolution order, for each input:
@@ -85,13 +85,19 @@ public class DataModelConverterService
             appScope = AppScopeResolver.Resolve(searchRoots, appUniqueName);
             appScope.Detail = detail;
             appScope.SearchRoots.AddRange(searchRoots);
+            appScope.IncludeAttributes = includeAttributes ?? [];
         }
 
         var parsedModel = ParseModules(modules, appScope);
 
-        if (includeAttributes != null && includeAttributes.Count > 0)
+        if (detail == DetailLevel.Full && includeAttributes != null && includeAttributes.Count > 0)
         {
             AttributeFilter.Apply(parsedModel, includeAttributes);
+
+            if (appScope != null)
+            {
+                AppScopeFilter.RemoveUnusedOptionSets(parsedModel);
+            }
         }
 
         var resultString = targetFormat.ToLower() switch
@@ -508,23 +514,19 @@ public class DataModelConverterService
             AttributeReferenceFilter.Apply(EntityTables, EntityRelationships, appScope, authorPrefixes);
         }
 
-        if (appScope != null)
-        {
-            var referenced = EntityTables
-                .SelectMany(table => table.Rows)
-                .Select(row => row.OptionSetName)
-                .Where(name => !string.IsNullOrEmpty(name))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            EntityOptionSets.RemoveAll(optionSet => !referenced.Contains(optionSet.LocalizedName));
-        }
-
-        return new ParsedModel()
+        var model = new ParsedModel()
         {
             tables = EntityTables,
             relationships = EntityRelationships,
             optionSets = EntityOptionSets
         };
+
+        if (appScope != null)
+        {
+            AppScopeFilter.RemoveUnusedOptionSets(model);
+        }
+
+        return model;
 
     }
 

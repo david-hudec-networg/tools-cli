@@ -72,7 +72,7 @@ public class DataModelConvertCliCommand : TxcLeafCommand
 
     [CliOption(
         Name = "--include-attributes",
-        Description = "Comma-separated list of attribute name patterns to include, e.g. \"myprefix_*,ownerid,statecode\". Supports '*' and '?' wildcards (case-insensitive). When omitted, every attribute is included. Primary keys and the columns backing relationships are always kept so the diagram stays valid.",
+        Description = "Comma-separated attribute name patterns to keep, such as \"contoso_*,ownerid\", where '*' and '?' are wildcards and case is ignored. Full detail keeps only matching columns plus primary keys and relationship columns (every attribute when omitted), while --detail minimal keeps matching columns in addition to the ones that files refer to.",
         Required = false
     )]
     public string? IncludeAttributes { get; set; }

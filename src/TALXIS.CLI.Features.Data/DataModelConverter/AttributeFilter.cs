@@ -20,10 +20,7 @@ public static class AttributeFilter
         ArgumentNullException.ThrowIfNull(model, nameof(model));
         ArgumentNullException.ThrowIfNull(includePatterns, nameof(includePatterns));
 
-        var matchers = includePatterns
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Select(GlobToRegex)
-            .ToList();
+        var matchers = CompileAll(includePatterns);
 
         if (matchers.Count == 0) return;
 
@@ -44,6 +41,18 @@ public static class AttributeFilter
                 .ToList();
         }
     }
+
+    public static Func<string, bool> Matcher(IReadOnlyCollection<string>? includePatterns)
+    {
+        var matchers = CompileAll(includePatterns ?? []);
+
+        return name => matchers.Any(rx => rx.IsMatch(name));
+    }
+
+    private static List<Regex> CompileAll(IEnumerable<string> patterns) => patterns
+        .Where(p => !string.IsNullOrWhiteSpace(p))
+        .Select(GlobToRegex)
+        .ToList();
 
     public static IReadOnlyList<string> ParsePatterns(string? commaSeparated)
     {

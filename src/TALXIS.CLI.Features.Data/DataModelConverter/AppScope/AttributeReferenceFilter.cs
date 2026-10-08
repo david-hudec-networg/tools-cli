@@ -38,6 +38,7 @@ public static class AttributeReferenceFilter
         }
 
         var references = ColumnReferences.Collect(scope.SearchRoots);
+        var isIncluded = AttributeFilter.Matcher(scope.IncludeAttributes);
 
         var edgeColumns = new HashSet<TableRow>();
         foreach (var relationship in relationships)
@@ -59,7 +60,7 @@ public static class AttributeReferenceFilter
 
             foreach (var row in declared)
             {
-                if (row.RowType is RowType.Primarykey or RowType.State or RowType.Status || edgeColumns.Contains(row)) continue;
+                if (row.RowType is RowType.Primarykey or RowType.State or RowType.Status || edgeColumns.Contains(row) || isIncluded(row.Name)) continue;
 
                 var reason = ReasonToDrop(declared, row, table.LogicalName, references, authorPrefixes);
                 if (reason == null) continue;

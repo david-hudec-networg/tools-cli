@@ -25,6 +25,8 @@ public class ResolvedAppScope
 
     public DetailLevel Detail { get; set; } = DetailLevel.Full;
 
+    public IReadOnlyCollection<string> IncludeAttributes { get; set; } = [];
+
     public List<string> SearchRoots { get; } = [];
 
     public List<DroppedColumn> DroppedColumns { get; } = [];
