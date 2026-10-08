@@ -40,6 +40,21 @@ public class DataModelConvertCliCommand : TxcLeafCommand
     public string? AppUniqueName { get; set; }
 
     [CliOption(
+        Name = "--detail",
+        Description = "'full' emits everything the inputs declare; 'minimal' keeps the columns that any form, view, workflow, chart, sitemap or .cs, .ts or .js file under --root (or under the inputs) refers to, plus keys, state columns and relationship columns. 'minimal' drops platform plumbing and requires --app and --target dbml.",
+        AllowedValues = new[] { "full", "minimal" },
+        Required = false
+    )]
+    public string Detail { get; set; } = "full";
+
+    [CliOption(
+        Name = "--show-dropped",
+        Description = "List every column --detail minimal left out and the reason, instead of only the counts per reason.",
+        Required = false
+    )]
+    public bool ShowDropped { get; set; }
+
+    [CliOption(
         Name = "--target",
         Description = "Target format for the conversion.",
         AllowedValues = new[] { "dbml", "sql", "plainsql", "edmx", "ribbon" },
@@ -64,6 +79,9 @@ public class DataModelConvertCliCommand : TxcLeafCommand
 
     protected override Task<int> ExecuteAsync()
     {
+        var detail = string.Equals(Detail, "minimal", StringComparison.OrdinalIgnoreCase) ? DetailLevel.Minimal : DetailLevel.Full;
+        DataModelConverterService.ValidateDetail(detail, TargetFormat!, AppUniqueName);
+
         var inputPaths = new List<string>(InputPaths);
 
         foreach (var root in Roots)
@@ -87,10 +105,24 @@ public class DataModelConvertCliCommand : TxcLeafCommand
 
         var includeAttributes = AttributeFilter.ParsePatterns(IncludeAttributes);
 
-        DataModelConverterService.ConvertModel(inputPaths, TargetFormat!, outputFilePath, AppUniqueName, Roots, includeAttributes);
+        var dropped = DataModelConverterService.ConvertModel(inputPaths, TargetFormat!, outputFilePath, AppUniqueName, Roots, includeAttributes, detail);
         EnsureGitIgnored(outputDir);
 
-        OutputFormatter.WriteResult("succeeded", $"Output written to: {outputFilePath}");
+        OutputFormatter.WriteData(DataModelConvertResult.For(outputFilePath, detail, dropped, ShowDropped), result =>
+        {
+            OutputWriter.WriteLine(result.Message);
+
+            foreach (var reason in result.DroppedByReason ?? [])
+            {
+                OutputWriter.WriteLine($"  dropped {reason.Count} column(s): {reason.Reason}");
+            }
+
+            foreach (var column in result.DroppedColumns ?? [])
+            {
+                OutputWriter.WriteLine($"    {column.Table}.{column.Column} ({column.Reason})");
+            }
+        });
+
         return Task.FromResult(ExitSuccess);
     }
 
