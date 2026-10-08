@@ -255,8 +255,30 @@ public class DataModelConverterService
     }
 
     public static ParsedModel ParseModelFolder(string folderPath)
+        => ParseModules([ParseFolderIntoModule(folderPath)]);
+
+    private static string SolutionNameFromFolder(string folderPath)
     {
-        Module module = new();
+        var manifestPath = Path.Combine(folderPath, "Other", "Solution.xml");
+        if (!File.Exists(manifestPath))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return XDocument.Load(manifestPath).Descendants().FirstOrDefault(x => x.Name == "UniqueName")?.Value ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read the solution name from {File}", manifestPath);
+            return string.Empty;
+        }
+    }
+
+    private static Module ParseFolderIntoModule(string folderPath)
+    {
+        Module module = new() { ModuleName = SolutionNameFromFolder(folderPath) };
 
         // Get files named Entity.xml in subfolders
         // Ordered: Directory.GetFiles gives no ordering guarantee, so without this the
@@ -321,8 +343,7 @@ public class DataModelConverterService
             }
         }
 
-        return ParseModules([module]);
-
+        return module;
     }
 
     public static ParsedModel ParseModel(string? base64solution)

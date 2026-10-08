@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using TALXIS.CLI.Features.Data.DataModelConverter;
@@ -80,6 +82,50 @@ public class MultipleInputMergeTests
 
     private static int Occurrences(string text, string fragment) =>
         text.Split(fragment).Length - 1;
+
+    private sealed class TempDir : IDisposable
+    {
+        public string Root { get; } = Path.Combine(Path.GetTempPath(), "txc-merge-" + Path.GetRandomFileName());
+        public string Output { get; } = Path.Combine(Path.GetTempPath(), "txc-merge-out-" + Path.GetRandomFileName());
+
+        public TempDir()
+        {
+            Directory.CreateDirectory(Root);
+            Directory.CreateDirectory(Output);
+        }
+
+        public string Declarations(string folder, string? solutionName, params XElement[] entities)
+        {
+            var dir = Path.Combine(Root, folder);
+            Directory.CreateDirectory(dir);
+
+            foreach (var entity in entities)
+            {
+                var entityDir = Path.Combine(dir, "Entities", entity.Element("Name")!.Value);
+                Directory.CreateDirectory(entityDir);
+                File.WriteAllText(Path.Combine(entityDir, "Entity.xml"), entity.ToString());
+            }
+
+            if (solutionName != null)
+            {
+                Directory.CreateDirectory(Path.Combine(dir, "Other"));
+                File.WriteAllText(
+                    Path.Combine(dir, "Other", "Solution.xml"),
+                    $"<ImportExportXml><SolutionManifest><UniqueName>{solutionName}</UniqueName></SolutionManifest></ImportExportXml>");
+            }
+
+            return dir;
+        }
+
+        public void Dispose()
+        {
+            Directory.Delete(Root, recursive: true);
+            Directory.Delete(Output, recursive: true);
+        }
+    }
+
+    private static string Dbml(string declarationsFolder) =>
+        DataModelConverterService.ConvertToDBML(DataModelConverterService.ParseModelFolder(declarationsFolder));
 
     [Fact]
     public void TablesNamedDifferentlyOnlyInCase_MergeIntoOneTable()
@@ -232,5 +278,45 @@ public class MultipleInputMergeTests
         var ribbon = DataModelConverterService.ConvertToRibbonDiff(model);
 
         Assert.Equal(2, Occurrences(ribbon, "<CustomAction Id=\"contoso.Shared\""));
+    }
+
+    [Fact]
+    public void FolderModule_IsNamedAfterItsSolutionUniqueName()
+    {
+        using var temp = new TempDir();
+        var folder = temp.Declarations("anything", "contoso_base", Entity("contoso_thing", Attr("contoso_a", "int")));
+
+        var model = DataModelConverterService.ParseModelFolder(folder);
+
+        Assert.Equal("contoso_base", Assert.Single(model.tables).ParentModule.ModuleName);
+        Assert.Contains("//contoso_base", DataModelConverterService.ConvertToDBML(model));
+    }
+
+    [Fact]
+    public void FolderWithoutASolutionManifest_HasNoModuleName()
+    {
+        using var temp = new TempDir();
+        var folder = temp.Declarations("anything", null, Entity("contoso_thing", Attr("contoso_a", "int")));
+
+        var model = DataModelConverterService.ParseModelFolder(folder);
+
+        Assert.Equal("", Assert.Single(model.tables).ParentModule.ModuleName);
+    }
+
+    [Theory]
+    [InlineData("contoso_base")]
+    [InlineData(null)]
+    public void TheSameDeclarationsUnderDifferentParents_ConvertIdentically(string? solutionName)
+    {
+        using var temp = new TempDir();
+        var entity = Entity("contoso_thing", Attr("contoso_a", "int"));
+        var first = temp.Declarations("clone-one/Model", solutionName, entity);
+        var second = temp.Declarations("elsewhere/deeper/Model", solutionName, entity);
+
+        var dbml = Dbml(first);
+
+        Assert.Equal(dbml, Dbml(second));
+        Assert.DoesNotContain("clone-one", dbml);
+        Assert.DoesNotContain(Path.GetFileName(temp.Root), dbml);
     }
 }
