@@ -32,6 +32,22 @@ public class MultipleInputMergeTests
         return module;
     }
 
+    private static XElement OptionSet(string name, params (int Value, string Label)[] options) =>
+        new("optionset",
+            new XAttribute("Name", name),
+            new XElement("OptionSetType", "picklist"),
+            new XElement("options", options.Select(o =>
+                new XElement("option",
+                    new XAttribute("value", o.Value),
+                    new XElement("labels",
+                        new XElement("label", new XAttribute("description", o.Label), new XAttribute("languagecode", "1033")))))));
+
+    private static Model.Module WithOptionSets(Model.Module module, params XElement[] optionSets)
+    {
+        module.optionsets.AddRange(optionSets);
+        return module;
+    }
+
     [Fact]
     public void TablesNamedDifferentlyOnlyInCase_MergeIntoOneTable()
     {
@@ -120,5 +136,21 @@ public class MultipleInputMergeTests
         ]);
 
         Assert.Equal("first", Assert.Single(model.tables).ParentModule.ModuleName);
+    }
+
+    [Theory]
+    [InlineData("One", "Uno", "One")]
+    [InlineData("Uno", "One", "Uno")]
+    public void OptionSetLabelsDisagreeing_KeepTheFirstModulesLabel(string first, string second, string expected)
+    {
+        var model = DataModelConverterService.ParseModules(
+        [
+            WithOptionSets(ModuleOf("first"), OptionSet("contoso_status", (1, first))),
+            WithOptionSets(ModuleOf("second"), OptionSet("contoso_status", (1, second), (2, "Two"))),
+        ]);
+
+        var optionSet = Assert.Single(model.optionSets);
+        Assert.Equal(expected, optionSet.Values.Single(v => v.Value == 1).Label);
+        Assert.Contains(optionSet.Values, v => v.Value == 2);
     }
 }
