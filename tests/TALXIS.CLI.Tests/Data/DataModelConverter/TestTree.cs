@@ -45,6 +45,18 @@ internal sealed class TestTree : IDisposable
         return Full(relative);
     }
 
+    public string Solution(string declarations, string uniqueName, string? prefix = null) =>
+        Write(
+            $"{declarations}/Other/Solution.xml",
+            $"""
+            <ImportExportXml>
+              <SolutionManifest>
+                <UniqueName>{uniqueName}</UniqueName>
+                <Publisher><CustomizationPrefix>{prefix}</CustomizationPrefix></Publisher>
+              </SolutionManifest>
+            </ImportExportXml>
+            """);
+
     public string Relationships(string declarations, params string[] relationships)
     {
         Write(

@@ -72,8 +72,12 @@ public class Table
             if (existing == null)
             {
                 Rows.Add(row);
+                continue;
             }
-            else if (existing.RowType != row.RowType)
+
+            existing.IsLogical ??= row.IsLogical;
+
+            if (existing.RowType != row.RowType)
             {
                 _logger.LogWarning(
                     "Attribute {Table}.{Attribute} is declared as {ExistingType} and again as {NewType}; keeping the first.",

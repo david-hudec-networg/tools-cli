@@ -286,22 +286,22 @@ public class DataModelConverterService
     public static ParsedModel ParseModelFolder(string folderPath)
         => ParseModules([ParseFolderIntoModule(folderPath)]);
 
-    private static string SolutionNameFromFolder(string folderPath)
+    private static XDocument? LoadManifest(string folderPath)
     {
         var manifestPath = Path.Combine(folderPath, "Other", "Solution.xml");
         if (!File.Exists(manifestPath))
         {
-            return string.Empty;
+            return null;
         }
 
         try
         {
-            return XDocument.Load(manifestPath).Descendants().FirstOrDefault(x => x.Name == "UniqueName")?.Value ?? string.Empty;
+            return XDocument.Load(manifestPath);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not read the solution name from {File}", manifestPath);
-            return string.Empty;
+            _logger.LogWarning(ex, "Could not read {File}", manifestPath);
+            return null;
         }
     }
 
@@ -329,7 +329,12 @@ public class DataModelConverterService
 
     private static Module ParseFolderIntoModule(string folderPath)
     {
-        Module module = new() { ModuleName = SolutionNameFromFolder(folderPath) };
+        var manifest = LoadManifest(folderPath);
+        Module module = new()
+        {
+            ModuleName = manifest?.Descendants().FirstOrDefault(x => x.Name == "UniqueName")?.Value ?? string.Empty,
+            CustomizationPrefix = manifest == null ? null : Module.PrefixFrom(manifest)
+        };
 
         // Get files named Entity.xml in subfolders
         // Ordered: Directory.GetFiles gives no ordering guarantee, so without this the
@@ -432,7 +437,12 @@ public class DataModelConverterService
             throw new FileNotFoundException("The solution archive does not contain the required customizations.xml or solution.xml files.");
         }
 
-        return new Module(XDocument.Load(solutionxml.Open()).Descendants().First(x => x.Name == "UniqueName").Value, XDocument.Load(customizationsxml.Open()));
+        var manifest = XDocument.Load(solutionxml.Open());
+
+        return new Module(manifest.Descendants().First(x => x.Name == "UniqueName").Value, XDocument.Load(customizationsxml.Open()))
+        {
+            CustomizationPrefix = Module.PrefixFrom(manifest)
+        };
     }
 
     public static ParsedModel ParseModules(List<Module> modules, ResolvedAppScope? appScope = null)
