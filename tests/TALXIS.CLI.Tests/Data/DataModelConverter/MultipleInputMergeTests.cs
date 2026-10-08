@@ -1,8 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
+using System.Text.Json;
 using System.Xml.Linq;
+using TALXIS.CLI.Features.Data;
 using TALXIS.CLI.Features.Data.DataModelConverter;
+using TALXIS.CLI.MCP;
 using Model = TALXIS.CLI.Features.Data.DataModelConverter.Model;
 using Xunit;
 
@@ -115,6 +121,42 @@ public class MultipleInputMergeTests
             }
 
             return dir;
+        }
+
+        public string Relationships(string declarationsFolder, params XElement[] relationships)
+        {
+            var dir = Path.Combine(declarationsFolder, "Other", "Relationships");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "links.xml"), new XElement("EntityRelationships", relationships).ToString());
+            return declarationsFolder;
+        }
+
+        public string Zip(string solutionName, XElement[] entities, params XElement[] relationships)
+        {
+            var path = Path.Combine(Root, solutionName + ".zip");
+            using var stream = File.Create(path);
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
+
+            WriteEntry(
+                archive,
+                "customizations.xml",
+                new XElement("ImportExportXml", new XElement("Entities", entities), new XElement("EntityRelationships", relationships)).ToString());
+            WriteEntry(archive, "solution.xml", $"<ImportExportXml><SolutionManifest><UniqueName>{solutionName}</UniqueName></SolutionManifest></ImportExportXml>");
+
+            return path;
+        }
+
+        public string Run(string format, params string[] inputs)
+        {
+            var output = Path.Combine(Output, "solution." + format);
+            DataModelConverterService.ConvertModel([.. inputs], format, output);
+            return File.ReadAllText(output);
+        }
+
+        private static void WriteEntry(ZipArchive archive, string name, string content)
+        {
+            using var writer = new StreamWriter(archive.CreateEntry(name).Open());
+            writer.Write(content);
         }
 
         public void Dispose()
@@ -318,5 +360,224 @@ public class MultipleInputMergeTests
         Assert.Equal(dbml, Dbml(second));
         Assert.DoesNotContain("clone-one", dbml);
         Assert.DoesNotContain(Path.GetFileName(temp.Root), dbml);
+    }
+
+    [Fact]
+    public void SeveralFolders_AreMergedIntoOneModel()
+    {
+        using var temp = new TempDir();
+        var baseDir = temp.Declarations("base", "contoso_base", Entity("contoso_thing", Attr("contoso_a", "int")));
+        var layerDir = temp.Declarations("layer", "contoso_layer",
+            Entity("contoso_thing", Attr("contoso_b", "int")),
+            Entity("contoso_extra", Attr("contoso_c", "int")));
+
+        var dbml = temp.Run("dbml", baseDir, layerDir);
+
+        Assert.Equal(1, Occurrences(dbml, "table contoso_thing "));
+        Assert.Equal(1, Occurrences(dbml, "  contoso_a "));
+        Assert.Equal(1, Occurrences(dbml, "  contoso_b "));
+        Assert.Equal(1, Occurrences(dbml, "table contoso_extra "));
+        Assert.Contains("//contoso_base", dbml);
+        Assert.Contains("//contoso_layer", dbml);
+    }
+
+    [Theory]
+    [InlineData("int", "nvarchar", "Int")]
+    [InlineData("nvarchar", "int", "Nvarchar")]
+    public void WhenFoldersDisagreeOnAColumnType_TheEarlierInputWins(string first, string second, string expected)
+    {
+        using var temp = new TempDir();
+        var firstDir = temp.Declarations("first", "contoso_first", Entity("contoso_thing", Attr("contoso_a", first)));
+        var secondDir = temp.Declarations("second", "contoso_second", Entity("contoso_thing", Attr("contoso_a", second)));
+
+        var dbml = temp.Run("dbml", firstDir, secondDir);
+
+        Assert.Equal(1, Occurrences(dbml, "  contoso_a "));
+        Assert.Contains($"  contoso_a {expected} ", dbml);
+    }
+
+    [Theory]
+    [InlineData("dbml")]
+    [InlineData("sql")]
+    [InlineData("ribbon")]
+    public void TheSameFolderTwice_ConvertsLikeOnce(string format)
+    {
+        using var temp = new TempDir();
+        var folder = temp.Relationships(
+            temp.Declarations("base", "contoso_base",
+                WithRibbon(Entity("contoso_a", Attr("contoso_x", "int")), "contoso.Action"),
+                Entity("contoso_b", Attr("contoso_y", "int"))),
+            ManyToMany("contoso_a_b", "contoso_a", "contoso_b"));
+
+        var once = temp.Run(format, folder);
+
+        Assert.Equal(once, temp.Run(format, folder, folder));
+    }
+
+    [Fact]
+    public void TheSameZipTwice_ConvertsLikeOnce()
+    {
+        using var temp = new TempDir();
+        var zip = temp.Zip(
+            "contoso_zip",
+            [Entity("contoso_a", Attr("contoso_x", "int")), Entity("contoso_b", Attr("contoso_y", "int"))],
+            ManyToMany("contoso_a_b", "contoso_a", "contoso_b"));
+
+        Assert.Equal(temp.Run("dbml", zip), temp.Run("dbml", zip, zip));
+    }
+
+    [Fact]
+    public void ProjectFolderAndItsDeclarationsFolder_ConvertLikeTheDeclarationsAlone()
+    {
+        using var temp = new TempDir();
+        var declarations = temp.Relationships(
+            temp.Declarations("project/Declarations", "contoso_base",
+                Entity("contoso_a", Attr("contoso_x", "int")),
+                Entity("contoso_b", Attr("contoso_y", "int"))),
+            ManyToMany("contoso_a_b", "contoso_a", "contoso_b"));
+        var project = Path.Combine(temp.Root, "project");
+        File.WriteAllText(
+            Path.Combine(project, "Model.csproj"),
+            "<Project><PropertyGroup><SolutionRootPath>Declarations</SolutionRootPath></PropertyGroup></Project>");
+
+        var once = temp.Run("dbml", declarations);
+
+        Assert.Equal(once, temp.Run("dbml", project, declarations));
+        Assert.Equal(once, temp.Run("dbml", declarations, project));
+    }
+
+    [Theory]
+    [InlineData("sql")]
+    [InlineData("ribbon")]
+    public void AFolderAndItsParent_DoNotRepeatWhatTheyShare(string format)
+    {
+        using var temp = new TempDir();
+        var declarations = temp.Relationships(
+            temp.Declarations("repo/Model", "contoso_base",
+                WithRibbon(Entity("contoso_a", Attr("contoso_x", "int")), "contoso.Action"),
+                Entity("contoso_b", Attr("contoso_y", "int"))),
+            ManyToMany("contoso_a_b", "contoso_a", "contoso_b"));
+        var repo = Path.Combine(temp.Root, "repo");
+
+        Assert.Equal(temp.Run(format, declarations), temp.Run(format, repo, declarations));
+    }
+
+    [Fact]
+    public void FolderAndZip_CanBeMixed()
+    {
+        using var temp = new TempDir();
+        var folder = temp.Declarations("base", "contoso_base", Entity("contoso_thing", Attr("contoso_a", "int")));
+        var zip = temp.Zip(
+            "contoso_zip",
+            [Entity("contoso_thing", Attr("contoso_b", "int")), Entity("contoso_other", Attr("contoso_c", "int"))]);
+
+        var dbml = temp.Run("dbml", folder, zip);
+
+        Assert.Equal(1, Occurrences(dbml, "table contoso_thing "));
+        Assert.Equal(1, Occurrences(dbml, "  contoso_a "));
+        Assert.Equal(1, Occurrences(dbml, "  contoso_b "));
+        Assert.Contains("//contoso_base", dbml);
+        Assert.Contains("//contoso_zip", dbml);
+    }
+
+    [Fact]
+    public void SeveralZips_AreMergedThroughTheBase64EntryPoint()
+    {
+        using var temp = new TempDir();
+        var zips = new[]
+        {
+            temp.Zip("contoso_one", [Entity("contoso_thing", Attr("contoso_a", "int"))]),
+            temp.Zip("contoso_two", [Entity("contoso_thing", Attr("contoso_b", "int"))]),
+        };
+
+        var model = DataModelConverterService.ParseModel([.. zips.Select(z => Convert.ToBase64String(File.ReadAllBytes(z)))]);
+
+        var table = Assert.Single(model.tables);
+        Assert.Equal(["contoso_a", "contoso_b", "contoso_thingid"], table.Rows.Select(r => r.Name).Order().ToArray());
+        Assert.Equal("contoso_one", table.ParentModule.ModuleName);
+    }
+
+    [Fact]
+    public void SeveralFoldersCopiedElsewhere_ConvertIdentically()
+    {
+        using var temp = new TempDir();
+        var entities = new[]
+        {
+            (Folder: "base", Solution: "contoso_base", Entity: Entity("contoso_thing", Attr("contoso_a", "int"))),
+            (Folder: "layer", Solution: "contoso_layer", Entity: Entity("contoso_thing", Attr("contoso_b", "int"))),
+        };
+        var here = entities.Select(e => temp.Declarations($"clone-one/{e.Folder}", e.Solution, e.Entity)).ToArray();
+        var there = entities.Select(e => temp.Declarations($"elsewhere/deeper/{e.Folder}", e.Solution, e.Entity)).ToArray();
+
+        var dbml = temp.Run("dbml", here);
+
+        Assert.Equal(dbml, temp.Run("dbml", there));
+        Assert.Equal(dbml, temp.Run("dbml", here));
+    }
+
+    [Fact]
+    public void AnInputThatDoesNotExist_IsReported()
+    {
+        using var temp = new TempDir();
+
+        Assert.Throws<FileNotFoundException>(() => temp.Run("dbml", Path.Combine(temp.Root, "missing")));
+    }
+
+    [Fact]
+    public void NoInputs_IsRejected()
+    {
+        Assert.Throws<ArgumentException>(() => DataModelConverterService.ConvertModel(new List<string>(), "dbml", "unused"));
+    }
+
+    [Fact]
+    public async Task TheCommand_MergesEveryInputItIsGiven()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Output, ".gitignore"), "");
+        var first = temp.Declarations("first", "contoso_first", Entity("contoso_thing", Attr("contoso_a", "int")));
+        var second = temp.Declarations("second", "contoso_second", Entity("contoso_thing", Attr("contoso_b", "int")));
+        var command = new DataModelConvertCliCommand
+        {
+            InputPaths = [first, second],
+            TargetFormat = "dbml",
+            OutputDirectory = temp.Output,
+        };
+
+        var execute = typeof(DataModelConvertCliCommand).GetMethod("ExecuteAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var exitCode = await (Task<int>)execute.Invoke(command, null)!;
+
+        Assert.Equal(0, exitCode);
+        var dbml = File.ReadAllText(Path.Combine(temp.Output, "solution.dbml"));
+        Assert.Equal(1, Occurrences(dbml, "table contoso_thing "));
+        Assert.Contains("  contoso_a ", dbml);
+        Assert.Contains("  contoso_b ", dbml);
+    }
+
+    [Fact]
+    public void TheMcpToolDeclaresInputAsAnArray_AndRepeatsTheFlagPerPath()
+    {
+        var adapter = new CliCommandAdapter();
+
+        var input = adapter.BuildInputSchema(typeof(DataModelConvertCliCommand)).GetProperty("properties").GetProperty("input");
+        var cliArgs = adapter.BuildCliArgs("data_model_convert", new Dictionary<string, JsonElement>
+        {
+            ["input"] = JsonSerializer.SerializeToElement(new[] { "first", "second" }),
+            ["target"] = JsonSerializer.SerializeToElement("dbml"),
+        });
+
+        Assert.Equal("array", input.GetProperty("type").GetString());
+        Assert.Equal(["data", "model", "convert", "--input", "first", "--input", "second", "--target", "dbml"], cliArgs);
+    }
+
+    [Fact]
+    public void TheMcpTool_StillAcceptsASingleInputString()
+    {
+        var cliArgs = new CliCommandAdapter().BuildCliArgs("data_model_convert", new Dictionary<string, JsonElement>
+        {
+            ["input"] = JsonSerializer.SerializeToElement("only"),
+            ["target"] = JsonSerializer.SerializeToElement("dbml"),
+        });
+
+        Assert.Equal(["data", "model", "convert", "--input", "only", "--target", "dbml"], cliArgs);
     }
 }

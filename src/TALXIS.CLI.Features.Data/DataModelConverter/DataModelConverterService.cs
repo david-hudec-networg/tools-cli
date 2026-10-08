@@ -21,42 +21,50 @@ public class DataModelConverterService
     private static readonly string[] SupportedFormats = ["dbml", "sql", "edmx", "ribbon"];
 
     /// <summary>
-    /// Parses a Power Platform solution from a solution project folder, a declarations
-    /// folder, or a .zip file, converts it to the specified format, and writes the result
-    /// to the output path.
+    /// Parses one or more Power Platform solution inputs (solution project folders,
+    /// declarations folders or .zip files), merges them into one model, converts it to the
+    /// specified format, and writes the result to the output path.
     /// </summary>
     /// <remarks>
-    /// Input resolution order:
+    /// Input resolution order, for each input:
     /// <list type="number">
-    ///   <item>Folder containing a <c>.cdsproj</c> or <c>.csproj</c> — reads
+    ///   <item>Folder containing a <c>.cdsproj</c> or <c>.csproj</c> -- reads
     ///         <c>SolutionRootPath</c> MSBuild property to locate the declarations folder.</item>
-    ///   <item>Folder without a project file — used directly as the declarations folder.</item>
-    ///   <item>A <c>.zip</c> file — decoded and parsed as an exported solution package.</item>
+    ///   <item>Folder without a project file -- used directly as the declarations folder.</item>
+    ///   <item>A <c>.zip</c> file -- decoded and parsed as an exported solution package.</item>
     /// </list>
+    /// Earlier inputs win where two declare the same attribute or option set label differently.
     /// </remarks>
-    public static void ConvertModel(string inputPath, string targetFormat, string outputFilePath)
+    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
 
-        ParsedModel parsedModel;
+        if (inputPaths is null || inputPaths.Count == 0)
+            throw new ArgumentException("At least one input path is required.");
 
-        if (Directory.Exists(inputPath))
+        List<Module> modules = [];
+
+        foreach (var inputPath in inputPaths)
         {
-            var declarationsPath = ResolveDeclarationsFolder(inputPath);
-            parsedModel = ParseModelFolder(declarationsPath);
+            if (Directory.Exists(inputPath))
+            {
+                modules.Add(ParseFolderIntoModule(ResolveDeclarationsFolder(inputPath)));
+            }
+            else if (File.Exists(inputPath))
+            {
+                using var fileStream = new FileStream(inputPath, FileMode.Open, FileAccess.Read);
+                using var memoryStream = new MemoryStream();
+                fileStream.CopyTo(memoryStream);
+                modules.Add(ParseZipIntoModule(Convert.ToBase64String(memoryStream.ToArray())));
+            }
+            else
+            {
+                throw new FileNotFoundException($"Input path '{inputPath}' does not exist.");
+            }
         }
-        else if (File.Exists(inputPath))
-        {
-            using var fileStream = new FileStream(inputPath, FileMode.Open, FileAccess.Read);
-            using var memoryStream = new MemoryStream();
-            fileStream.CopyTo(memoryStream);
-            parsedModel = ParseModel(Convert.ToBase64String(memoryStream.ToArray()));
-        }
-        else
-        {
-            throw new FileNotFoundException($"Input path '{inputPath}' does not exist.");
-        }
+
+        var parsedModel = ParseModules(modules);
 
         var resultString = targetFormat.ToLower() switch
         {
@@ -363,22 +371,25 @@ public class DataModelConverterService
 
         foreach (var solution in base64solution)
         {
-            using ZipArchive archive = new(new MemoryStream(Convert.FromBase64String(solution)));
-
-            var customizationsxml = archive.Entries.FirstOrDefault(x => x.FullName.Equals("customizations.xml", StringComparison.OrdinalIgnoreCase));
-            var solutionxml = archive.Entries.FirstOrDefault(x => x.FullName.Equals("solution.xml", StringComparison.OrdinalIgnoreCase));
-
-            if (customizationsxml == null || solutionxml == null)
-            {
-                throw new FileNotFoundException("The solution archive does not contain the required customizations.xml or solution.xml files.");
-            }
-
-            Module foundModule = new(XDocument.Load(solutionxml.Open()).Descendants().First(x => x.Name == "UniqueName").Value, XDocument.Load(customizationsxml.Open()));
-
-            modules.Add(foundModule);
+            modules.Add(ParseZipIntoModule(solution));
         }
 
         return ParseModules(modules);
+    }
+
+    private static Module ParseZipIntoModule(string base64solution)
+    {
+        using ZipArchive archive = new(new MemoryStream(Convert.FromBase64String(base64solution)));
+
+        var customizationsxml = archive.Entries.FirstOrDefault(x => x.FullName.Equals("customizations.xml", StringComparison.OrdinalIgnoreCase));
+        var solutionxml = archive.Entries.FirstOrDefault(x => x.FullName.Equals("solution.xml", StringComparison.OrdinalIgnoreCase));
+
+        if (customizationsxml == null || solutionxml == null)
+        {
+            throw new FileNotFoundException("The solution archive does not contain the required customizations.xml or solution.xml files.");
+        }
+
+        return new Module(XDocument.Load(solutionxml.Open()).Descendants().First(x => x.Name == "UniqueName").Value, XDocument.Load(customizationsxml.Open()));
     }
 
     public static ParsedModel ParseModules(List<Module> modules)
