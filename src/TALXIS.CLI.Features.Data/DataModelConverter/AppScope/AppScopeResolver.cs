@@ -22,6 +22,12 @@ public class ResolvedAppScope
     /// <summary>Every table an input declares, captured before scoping removes the ones the
     /// app does not use.</summary>
     public HashSet<string> AllDeclaredTableLogicalNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public DetailLevel Detail { get; set; } = DetailLevel.Full;
+
+    public List<string> SearchRoots { get; } = [];
+
+    public List<DroppedColumn> DroppedColumns { get; } = [];
 }
 
 /// <summary>

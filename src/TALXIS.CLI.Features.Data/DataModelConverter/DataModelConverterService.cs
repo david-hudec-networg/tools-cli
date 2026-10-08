@@ -30,6 +30,9 @@ public class DataModelConverterService
     /// built on; its app module is searched for under <paramref name="appSearchRoots"/>, or
     /// under the inputs when none are given. <paramref name="includeAttributes"/> keeps only
     /// the columns matching one of its patterns, plus keys and the columns relationships use.
+    /// <paramref name="detail"/> of <see cref="DetailLevel.Minimal"/> narrows each table of the
+    /// app to the columns that files under the search roots refer to, and the columns it left
+    /// out are returned.
     /// </summary>
     /// <remarks>
     /// Input resolution order, for each input:
@@ -41,10 +44,12 @@ public class DataModelConverterService
     /// </list>
     /// Earlier inputs win where two declare the same attribute or option set label differently.
     /// </remarks>
-    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName = null, List<string>? appSearchRoots = null, IReadOnlyCollection<string>? includeAttributes = null)
+    public static IReadOnlyList<DroppedColumn> ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName = null, List<string>? appSearchRoots = null, IReadOnlyCollection<string>? includeAttributes = null, DetailLevel detail = DetailLevel.Full)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
+
+        ValidateDetail(detail, targetFormat, appUniqueName);
 
         if (inputPaths is null || inputPaths.Count == 0)
             throw new ArgumentException("At least one input path is required.");
@@ -76,7 +81,10 @@ public class DataModelConverterService
         ResolvedAppScope? appScope = null;
         if (!string.IsNullOrWhiteSpace(appUniqueName))
         {
-            appScope = AppScopeResolver.Resolve(appSearchRoots is { Count: > 0 } ? appSearchRoots : declarationFolders, appUniqueName);
+            var searchRoots = appSearchRoots is { Count: > 0 } ? appSearchRoots : declarationFolders;
+            appScope = AppScopeResolver.Resolve(searchRoots, appUniqueName);
+            appScope.Detail = detail;
+            appScope.SearchRoots.AddRange(searchRoots);
         }
 
         var parsedModel = ParseModules(modules, appScope);
@@ -98,6 +106,20 @@ public class DataModelConverterService
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputFilePath))!);
         using var writer = new StreamWriter(outputFilePath);
         writer.Write(resultString);
+
+        return appScope?.DroppedColumns ?? [];
+    }
+
+    public static void ValidateDetail(DetailLevel detail, string targetFormat, string? appUniqueName)
+    {
+        if (detail != DetailLevel.Minimal) return;
+
+        if (string.IsNullOrWhiteSpace(appUniqueName))
+            throw new ArgumentException("--detail minimal narrows the tables of one app, so it requires --app.");
+
+        if (!string.Equals(targetFormat, "dbml", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException(
+                "--detail minimal only supports --target dbml: a sql or edmx file made from a narrowed model would silently lack columns. Use --detail full for other targets.");
     }
 
     /// <summary>
@@ -479,6 +501,12 @@ public class DataModelConverterService
         }
 
         List<Relationship> EntityRelationships = ParseRelationships(modules, EntityTables, appScope);
+
+        if (appScope is { Detail: DetailLevel.Minimal })
+        {
+            var authorPrefixes = modules.Select(module => module.CustomizationPrefix).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+            AttributeReferenceFilter.Apply(EntityTables, EntityRelationships, appScope, authorPrefixes);
+        }
 
         if (appScope != null)
         {

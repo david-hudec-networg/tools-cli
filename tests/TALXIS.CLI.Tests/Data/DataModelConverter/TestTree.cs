@@ -126,6 +126,26 @@ internal sealed class TestTree : IDisposable
         return $"""<AppModuleComponent type="{type}" schemaName="{schemaName}"{action} />""";
     }
 
+    public string OrderApp(string? prefix = "contoso")
+    {
+        const string declarations = "Model/Declarations";
+        Write($"{declarations}/Entities/contoso_order/Entity.xml",
+            Entity("contoso_order",
+                Attr("contoso_total", "int"),
+                Attr("contoso_note", "nvarchar"),
+                Picklist("contoso_kind"),
+                Attr("createdon", "datetime"),
+                Attr("modifiedon", "datetime"),
+                Attr("owningname", "nvarchar", isLogical: true)));
+        OptionSet(declarations, "contoso_kind");
+        Solution(declarations, "contoso_core", prefix);
+        Write($"{declarations}/Entities/contoso_order/FormXml/main/form.xml",
+            """<form><control datafieldname="contoso_total" /><control datafieldname="createdon" /></form>""");
+        SiteMap(declarations, "contoso_app", "contoso_app", """<SubArea Entity="contoso_order" Note="contoso_note modifiedon" />""");
+        AppModule(declarations, "contoso_app", "contoso_app", Component("1", "contoso_order"));
+        return Full(declarations);
+    }
+
     public static string Entity(string logicalName, params string[] attributes) =>
         $"""
         <Entity>
@@ -140,8 +160,8 @@ internal sealed class TestTree : IDisposable
         </Entity>
         """;
 
-    public static string Attr(string name, string type) =>
-        $"""<attribute PhysicalName="{name}"><Type>{type}</Type></attribute>""";
+    public static string Attr(string name, string type, bool? isLogical = null) =>
+        $"""<attribute PhysicalName="{name}"><Type>{type}</Type>{(isLogical == null ? "" : $"<IsLogical>{(isLogical.Value ? 1 : 0)}</IsLogical>")}</attribute>""";
 
     public static string Picklist(string name) =>
         $"""<attribute PhysicalName="{name}"><Type>picklist</Type><OptionSetName>{name}</OptionSetName></attribute>""";
