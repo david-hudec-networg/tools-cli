@@ -45,10 +45,13 @@ internal sealed class TestTree : IDisposable
         return Full(relative);
     }
 
-    public string Relationships(string declarations, params string[] relationships) =>
+    public string Relationships(string declarations, params string[] relationships)
+    {
         Write(
             $"{declarations}/Other/Relationships/links.xml",
             $"<EntityRelationships>{string.Join("", relationships)}</EntityRelationships>");
+        return Full(declarations);
+    }
 
     public string OptionSet(string declarations, string name) =>
         Write(

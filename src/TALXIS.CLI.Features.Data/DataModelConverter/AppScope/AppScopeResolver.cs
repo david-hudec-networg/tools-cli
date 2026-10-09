@@ -18,6 +18,10 @@ public class ResolvedAppScope
     public HashSet<string> TableLogicalNames { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public List<string> SourceFiles { get; } = [];
+
+    /// <summary>Every table an input declares, captured before scoping removes the ones the
+    /// app does not use.</summary>
+    public HashSet<string> AllDeclaredTableLogicalNames { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>

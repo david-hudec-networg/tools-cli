@@ -484,6 +484,11 @@ public class DataModelConverterService
 
     }
 
+    private static TableType StubTypeFor(ResolvedAppScope? appScope, string logicalName)
+        => appScope?.AllDeclaredTableLogicalNames.Contains(logicalName) == true
+            ? TableType.NotInApp
+            : TableType.NotInSolution;
+
     private static bool IsInAppScope(XElement relationship, ResolvedAppScope appScope)
     {
         if (relationship.Element("EntityRelationshipType")?.Value == "ManyToMany")
@@ -513,17 +518,19 @@ public class DataModelConverterService
 
                 if (relationship.Element("EntityRelationshipType").Value == "ManyToMany")
                 {
-                    var firstEntityTable = EntityTables.Find(relationship.Element("FirstEntityName").Value);
+                    var firstEntityName = relationship.Element("FirstEntityName").Value;
+                    var firstEntityTable = EntityTables.Find(firstEntityName);
                     if (firstEntityTable == null)
                     {
-                        firstEntityTable = TableExtension.CreateTable(relationship.Element("FirstEntityName").Value, TableType.NotInSolution);
+                        firstEntityTable = TableExtension.CreateTable(firstEntityName, StubTypeFor(appScope, firstEntityName));
                         EntityTables.Add(firstEntityTable);
                     }
 
-                    var secondEntityTable = EntityTables.Find(relationship.Element("SecondEntityName").Value);
+                    var secondEntityName = relationship.Element("SecondEntityName").Value;
+                    var secondEntityTable = EntityTables.Find(secondEntityName);
                     if (secondEntityTable == null)
                     {
-                        secondEntityTable = TableExtension.CreateTable(relationship.Element("SecondEntityName").Value, TableType.NotInSolution);
+                        secondEntityTable = TableExtension.CreateTable(secondEntityName, StubTypeFor(appScope, secondEntityName));
                         EntityTables.Add(secondEntityTable);
                     }
 
@@ -603,7 +610,7 @@ public class DataModelConverterService
 
                         if (missingEntityLogicalName != "FileAttachment")
                         {
-                            leftSideTable = TableExtension.CreateTable(missingEntityLogicalName, TableType.NotInSolution);
+                            leftSideTable = TableExtension.CreateTable(missingEntityLogicalName, StubTypeFor(appScope, missingEntityLogicalName));
                             EntityTables.Add(leftSideTable);
                         }
                     }
@@ -615,7 +622,7 @@ public class DataModelConverterService
 
                         if (missingEntityLogicalName != "FileAttachment")
                         {
-                            rightSideTable = TableExtension.CreateTable(missingEntityLogicalName, TableType.NotInSolution);
+                            rightSideTable = TableExtension.CreateTable(missingEntityLogicalName, StubTypeFor(appScope, missingEntityLogicalName));
                             EntityTables.Add(rightSideTable);
                         }
                     }

@@ -17,7 +17,10 @@ public enum TableType
 {
     InSolution = 0,
     NotInSolution = 1,
-    ConnectionTable = 2
+    ConnectionTable = 2,
+
+    /// <summary>A stub for a table an input declares but app scoping left out.</summary>
+    NotInApp = 3
 }
 
 public class Table

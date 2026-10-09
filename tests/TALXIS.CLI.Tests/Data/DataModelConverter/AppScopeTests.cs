@@ -119,6 +119,50 @@ public class AppScopeTests
 
         Assert.Equal(["contoso_inapp", "contoso_outside"], Names(model));
         Assert.Single(model.relationships, r => r.LeftSideTable.LogicalName == "contoso_inapp" && r.RighSideTable.LogicalName == "contoso_outside");
+        Assert.Equal(Model.TableType.NotInApp, model.tables.Single(table => table.LogicalName == "contoso_outside").Type);
+    }
+
+    [Fact]
+    public void AManyToManyStub_IsOutsideTheApp_WhenAnInputDeclaresTheTable()
+    {
+        var module = ModuleOf(
+            [TestTree.Entity("contoso_inapp"), TestTree.Entity("contoso_outside")],
+            TestTree.ManyToMany("contoso_link", "contoso_inapp", "contoso_outside"));
+
+        var model = DataModelConverterService.ParseModules([module], ScopeOf("contoso_inapp"));
+
+        Assert.Equal(Model.TableType.NotInApp, model.tables.Single(table => table.LogicalName == "contoso_outside").Type);
+        Assert.Equal(Model.TableType.ConnectionTable, model.tables.Single(table => table.LogicalName == "contoso_link").Type);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AStubForATableNoInputDeclares_IsMissingFromTheSolution(bool scoped)
+    {
+        var module = ModuleOf(
+            [TestTree.Entity("contoso_inapp")],
+            TestTree.OneToMany("contoso_inapp", "contoso_inapp_lookup", "contoso_ghost"));
+
+        var model = DataModelConverterService.ParseModules([module], scoped ? ScopeOf("contoso_inapp") : null);
+
+        Assert.Equal(Model.TableType.NotInSolution, model.tables.Single(table => table.LogicalName == "contoso_ghost").Type);
+    }
+
+    [Fact]
+    public void TheDiagramTellsATableOutsideTheAppFromOneMissingFromTheSolution()
+    {
+        using var tree = new TestTree();
+        var model = Shop(tree, "Model/Declarations");
+        var ghosts = tree.Relationships("Ghosts/Declarations", TestTree.OneToMany("contoso_order", "contoso_ghostid", "contoso_ghost"));
+        tree.AppModule("Apps/Declarations", "contoso_app", "contoso_app", TestTree.Component("1", "contoso_order"));
+        var output = Path.Combine(tree.Output, "solution.dbml");
+
+        DataModelConverterService.ConvertModel([model, ghosts], "dbml", output, "contoso_app", [tree.Full("Apps")]);
+
+        var dbml = File.ReadAllText(output);
+        Assert.Contains("table contoso_customer [headercolor: #7f8c8d] //declared outside this app", dbml);
+        Assert.Contains("table contoso_ghost [headercolor: #c0392b]", dbml);
     }
 
     [Fact]

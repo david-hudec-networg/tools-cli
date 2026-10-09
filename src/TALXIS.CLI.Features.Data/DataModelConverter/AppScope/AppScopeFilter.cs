@@ -18,6 +18,11 @@ public static class AppScopeFilter
     /// </summary>
     public static void ApplyTableScope(List<Table> tables, ResolvedAppScope scope)
     {
+        foreach (var table in tables.Where(table => table.Type == TableType.InSolution))
+        {
+            scope.AllDeclaredTableLogicalNames.Add(table.LogicalName);
+        }
+
         var removed = tables.RemoveAll(table =>
             table.Type == TableType.InSolution && !scope.TableLogicalNames.Contains(table.LogicalName));
 
