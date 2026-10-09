@@ -45,6 +45,44 @@ internal sealed class TestTree : IDisposable
         return Full(relative);
     }
 
+    public string Relationships(string declarations, params string[] relationships) =>
+        Write(
+            $"{declarations}/Other/Relationships/links.xml",
+            $"<EntityRelationships>{string.Join("", relationships)}</EntityRelationships>");
+
+    public string OptionSet(string declarations, string name) =>
+        Write(
+            $"{declarations}/OptionSets/{name}.xml",
+            $"""
+            <optionset Name="{name}">
+              <OptionSetType>picklist</OptionSetType>
+              <options>
+                <option value="1"><labels><label description="One" languagecode="1033" /></labels></option>
+                <option value="2"><labels><label description="Two" languagecode="1033" /></labels></option>
+              </options>
+            </optionset>
+            """);
+
+    public static string OneToMany(string child, string lookup, string parent) =>
+        $"""
+        <EntityRelationship Name="rel_{child}_{parent}">
+          <EntityRelationshipType>OneToMany</EntityRelationshipType>
+          <ReferencingEntityName>{child}</ReferencingEntityName>
+          <ReferencedEntityName>{parent}</ReferencedEntityName>
+          <ReferencingAttributeName>{lookup}</ReferencingAttributeName>
+        </EntityRelationship>
+        """;
+
+    public static string ManyToMany(string name, string first, string second) =>
+        $"""
+        <EntityRelationship Name="{name}">
+          <EntityRelationshipType>ManyToMany</EntityRelationshipType>
+          <FirstEntityName>{first}</FirstEntityName>
+          <SecondEntityName>{second}</SecondEntityName>
+          <IntersectEntityName>{name}</IntersectEntityName>
+        </EntityRelationship>
+        """;
+
     public string AppModule(string declarations, string folderName, string uniqueName, params string[] components) =>
         Write(
             $"{declarations}/AppModules/{folderName}/AppModule_managed.xml",
@@ -89,6 +127,9 @@ internal sealed class TestTree : IDisposable
 
     public static string Attr(string name, string type) =>
         $"""<attribute PhysicalName="{name}"><Type>{type}</Type></attribute>""";
+
+    public static string Picklist(string name) =>
+        $"""<attribute PhysicalName="{name}"><Type>picklist</Type><OptionSetName>{name}</OptionSetName></attribute>""";
 
     public string Dbml(string outputFileName = "solution.dbml") => File.ReadAllText(Path.Combine(Output, outputFileName));
 

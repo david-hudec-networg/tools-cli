@@ -33,6 +33,13 @@ public class DataModelConvertCliCommand : TxcLeafCommand
     public List<string> Roots { get; set; } = [];
 
     [CliOption(
+        Name = "--app",
+        Description = "Unique name of a model-driven app, to narrow the output to the tables that app is built on. Its app module is read from unpacked source under --root, or under the inputs when no --root is given.",
+        Required = false
+    )]
+    public string? AppUniqueName { get; set; }
+
+    [CliOption(
         Name = "--target",
         Description = "Target format for the conversion.",
         AllowedValues = new[] { "dbml", "sql", "plainsql", "edmx", "ribbon" },
@@ -68,14 +75,11 @@ public class DataModelConvertCliCommand : TxcLeafCommand
         }
 
         var outputDir = OutputDirectory ?? Path.Combine(Directory.GetCurrentDirectory(), ExportsFolderName);
-
-        Directory.CreateDirectory(outputDir);
-        EnsureGitIgnored(outputDir);
-
         var extension = TargetFormat!.ToLower() == "plainsql" ? "sql" : TargetFormat.ToLower();
         var outputFilePath = Path.Combine(outputDir, $"solution.{extension}");
 
-        DataModelConverterService.ConvertModel(inputPaths, TargetFormat!, outputFilePath);
+        DataModelConverterService.ConvertModel(inputPaths, TargetFormat!, outputFilePath, AppUniqueName, Roots);
+        EnsureGitIgnored(outputDir);
 
         OutputFormatter.WriteResult("succeeded", $"Output written to: {outputFilePath}");
         return Task.FromResult(ExitSuccess);

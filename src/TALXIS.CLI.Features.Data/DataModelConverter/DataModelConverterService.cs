@@ -8,6 +8,7 @@ using System.Xml;
 using System.Xml.Linq;
 using System.Xml.Serialization;
 using Microsoft.Extensions.Logging;
+using TALXIS.CLI.Features.Data.DataModelConverter.AppScope;
 using TALXIS.CLI.Features.Data.DataModelConverter.Extensions;
 using TALXIS.CLI.Features.Data.DataModelConverter.Model;
 using TALXIS.CLI.Features.Data.DataModelConverter.Translators;
@@ -23,7 +24,11 @@ public class DataModelConverterService
     /// <summary>
     /// Parses one or more Power Platform solution inputs (solution project folders,
     /// declarations folders or .zip files), merges them into one model, converts it to the
-    /// specified format, and writes the result to the output path.
+    /// specified format, and writes the result to the output path, creating its folder only
+    /// once the conversion has succeeded.
+    /// <paramref name="appUniqueName"/> narrows the model to the tables a model-driven app is
+    /// built on; its app module is searched for under <paramref name="appSearchRoots"/>, or
+    /// under the inputs when none are given.
     /// </summary>
     /// <remarks>
     /// Input resolution order, for each input:
@@ -35,7 +40,7 @@ public class DataModelConverterService
     /// </list>
     /// Earlier inputs win where two declare the same attribute or option set label differently.
     /// </remarks>
-    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath)
+    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName = null, List<string>? appSearchRoots = null)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
@@ -44,12 +49,15 @@ public class DataModelConverterService
             throw new ArgumentException("At least one input path is required.");
 
         List<Module> modules = [];
+        List<string> declarationFolders = [];
 
         foreach (var inputPath in inputPaths)
         {
             if (Directory.Exists(inputPath))
             {
-                modules.Add(ParseFolderIntoModule(ResolveDeclarationsFolder(inputPath)));
+                var declarationsPath = ResolveDeclarationsFolder(inputPath);
+                modules.Add(ParseFolderIntoModule(declarationsPath));
+                declarationFolders.Add(declarationsPath);
             }
             else if (File.Exists(inputPath))
             {
@@ -64,7 +72,13 @@ public class DataModelConverterService
             }
         }
 
-        var parsedModel = ParseModules(modules);
+        ResolvedAppScope? appScope = null;
+        if (!string.IsNullOrWhiteSpace(appUniqueName))
+        {
+            appScope = AppScopeResolver.Resolve(appSearchRoots is { Count: > 0 } ? appSearchRoots : declarationFolders, appUniqueName);
+        }
+
+        var parsedModel = ParseModules(modules, appScope);
 
         var resultString = targetFormat.ToLower() switch
         {
@@ -75,6 +89,7 @@ public class DataModelConverterService
             _          => ConvertToDBML(parsedModel)
         };
 
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputFilePath))!);
         using var writer = new StreamWriter(outputFilePath);
         writer.Write(resultString);
     }
@@ -414,7 +429,7 @@ public class DataModelConverterService
         return new Module(XDocument.Load(solutionxml.Open()).Descendants().First(x => x.Name == "UniqueName").Value, XDocument.Load(customizationsxml.Open()));
     }
 
-    public static ParsedModel ParseModules(List<Module> modules)
+    public static ParsedModel ParseModules(List<Module> modules, ResolvedAppScope? appScope = null)
     {
 
         List<Table> EntityTables = ParseEntities(modules);
@@ -442,7 +457,23 @@ public class DataModelConverterService
             entity.SetName = entity.LogicalName;
         }
 
-        List<Relationship> EntityRelationships = ParseRelationships(modules, EntityTables);
+        if (appScope != null)
+        {
+            AppScopeFilter.ApplyTableScope(EntityTables, appScope);
+        }
+
+        List<Relationship> EntityRelationships = ParseRelationships(modules, EntityTables, appScope);
+
+        if (appScope != null)
+        {
+            var referenced = EntityTables
+                .SelectMany(table => table.Rows)
+                .Select(row => row.OptionSetName)
+                .Where(name => !string.IsNullOrEmpty(name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            EntityOptionSets.RemoveAll(optionSet => !referenced.Contains(optionSet.LocalizedName));
+        }
 
         return new ParsedModel()
         {
@@ -453,7 +484,18 @@ public class DataModelConverterService
 
     }
 
-    public static List<Relationship> ParseRelationships(List<Module> modules, List<Table> EntityTables)
+    private static bool IsInAppScope(XElement relationship, ResolvedAppScope appScope)
+    {
+        if (relationship.Element("EntityRelationshipType")?.Value == "ManyToMany")
+        {
+            return appScope.TableLogicalNames.Contains(relationship.Element("FirstEntityName")?.Value ?? string.Empty)
+                || appScope.TableLogicalNames.Contains(relationship.Element("SecondEntityName")?.Value ?? string.Empty);
+        }
+
+        return appScope.TableLogicalNames.Contains(relationship.Element("ReferencingEntityName")?.Value ?? string.Empty);
+    }
+
+    public static List<Relationship> ParseRelationships(List<Module> modules, List<Table> EntityTables, ResolvedAppScope? appScope = null)
     {
 
         List<Relationship> EntityRelationships = new();
@@ -464,6 +506,10 @@ public class DataModelConverterService
 
             foreach (var relationship in module.relationships)
             {
+                if (appScope != null && !IsInAppScope(relationship, appScope))
+                {
+                    continue;
+                }
 
                 if (relationship.Element("EntityRelationshipType").Value == "ManyToMany")
                 {
