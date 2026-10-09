@@ -55,6 +55,13 @@ public class DataModelConvertCliCommand : TxcLeafCommand
     )]
     public string? OutputDirectory { get; set; }
 
+    [CliOption(
+        Name = "--include-attributes",
+        Description = "Comma-separated list of attribute name patterns to include, e.g. \"myprefix_*,ownerid,statecode\". Supports '*' and '?' wildcards (case-insensitive). When omitted, every attribute is included. Primary keys and the columns backing relationships are always kept so the diagram stays valid.",
+        Required = false
+    )]
+    public string? IncludeAttributes { get; set; }
+
     protected override Task<int> ExecuteAsync()
     {
         var inputPaths = new List<string>(InputPaths);
@@ -78,7 +85,9 @@ public class DataModelConvertCliCommand : TxcLeafCommand
         var extension = TargetFormat!.ToLower() == "plainsql" ? "sql" : TargetFormat.ToLower();
         var outputFilePath = Path.Combine(outputDir, $"solution.{extension}");
 
-        DataModelConverterService.ConvertModel(inputPaths, TargetFormat!, outputFilePath, AppUniqueName, Roots);
+        var includeAttributes = AttributeFilter.ParsePatterns(IncludeAttributes);
+
+        DataModelConverterService.ConvertModel(inputPaths, TargetFormat!, outputFilePath, AppUniqueName, Roots, includeAttributes);
         EnsureGitIgnored(outputDir);
 
         OutputFormatter.WriteResult("succeeded", $"Output written to: {outputFilePath}");

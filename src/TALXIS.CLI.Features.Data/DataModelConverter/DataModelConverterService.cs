@@ -28,7 +28,8 @@ public class DataModelConverterService
     /// once the conversion has succeeded.
     /// <paramref name="appUniqueName"/> narrows the model to the tables a model-driven app is
     /// built on; its app module is searched for under <paramref name="appSearchRoots"/>, or
-    /// under the inputs when none are given.
+    /// under the inputs when none are given. <paramref name="includeAttributes"/> keeps only
+    /// the columns matching one of its patterns, plus keys and the columns relationships use.
     /// </summary>
     /// <remarks>
     /// Input resolution order, for each input:
@@ -40,7 +41,7 @@ public class DataModelConverterService
     /// </list>
     /// Earlier inputs win where two declare the same attribute or option set label differently.
     /// </remarks>
-    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName = null, List<string>? appSearchRoots = null)
+    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName = null, List<string>? appSearchRoots = null, IReadOnlyCollection<string>? includeAttributes = null)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
@@ -79,6 +80,11 @@ public class DataModelConverterService
         }
 
         var parsedModel = ParseModules(modules, appScope);
+
+        if (includeAttributes != null && includeAttributes.Count > 0)
+        {
+            AttributeFilter.Apply(parsedModel, includeAttributes);
+        }
 
         var resultString = targetFormat.ToLower() switch
         {
