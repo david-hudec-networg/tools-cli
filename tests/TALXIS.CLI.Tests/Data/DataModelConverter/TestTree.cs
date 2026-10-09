@@ -45,6 +45,34 @@ internal sealed class TestTree : IDisposable
         return Full(relative);
     }
 
+    public string AppModule(string declarations, string folderName, string uniqueName, params string[] components) =>
+        Write(
+            $"{declarations}/AppModules/{folderName}/AppModule_managed.xml",
+            $"""
+            <AppModule>
+              <UniqueName>{uniqueName}</UniqueName>
+              <AppModuleComponents>
+                {string.Join("", components)}
+              </AppModuleComponents>
+            </AppModule>
+            """);
+
+    public string SiteMap(string declarations, string folderName, string appUniqueName, string subAreas) =>
+        Write(
+            $"{declarations}/AppModuleSiteMaps/{folderName}/AppModuleSiteMap_managed.xml",
+            $"""
+            <AppModuleSiteMap>
+              <SiteMapUniqueName>{appUniqueName}</SiteMapUniqueName>
+              {subAreas}
+            </AppModuleSiteMap>
+            """);
+
+    public static string Component(string type, string schemaName, string? solutionAction = null)
+    {
+        var action = solutionAction == null ? "" : $" solutionaction=\"{solutionAction}\"";
+        return $"""<AppModuleComponent type="{type}" schemaName="{schemaName}"{action} />""";
+    }
+
     public static string Entity(string logicalName, params string[] attributes) =>
         $"""
         <Entity>
