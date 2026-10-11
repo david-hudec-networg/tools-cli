@@ -284,6 +284,28 @@ public class DataModelConverterService
         }
     }
 
+    /// <summary>
+    /// Finds every declarations folder beneath a root: the folder holding Entities/&lt;table&gt;/Entity.xml.
+    /// Modules call it Declarations or CDS, so the entity files are looked for rather than a
+    /// folder name. Folders come back ordered by path relative to the root, which keeps the
+    /// order the same on every platform.
+    /// </summary>
+    public static List<string> DiscoverDeclarationFolders(string root)
+    {
+        if (!Directory.Exists(root))
+            throw new ArgumentException($"Root '{root}' is not an existing folder.");
+
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+
+        return [.. SourceTree.EnumerateFiles(fullRoot, "Entity.xml")
+            .Select(file => Path.GetRelativePath(fullRoot, file).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            .Where(segments => segments.Length >= 3 && string.Equals(segments[^3], "Entities", StringComparison.OrdinalIgnoreCase))
+            .Select(segments => string.Join('/', segments[..^3]))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .Select(relative => Path.GetFullPath(Path.Combine(fullRoot, relative)))];
+    }
+
     private static Module ParseFolderIntoModule(string folderPath)
     {
         Module module = new() { ModuleName = SolutionNameFromFolder(folderPath) };
