@@ -42,4 +42,19 @@ public static class AppScopeFilter
                 scope.UniqueName, missing.Count, string.Join(", ", missing));
         }
     }
+
+    /// <summary>
+    /// Drops the option sets no remaining column refers to. A step that removes columns after
+    /// this has run needs another call.
+    /// </summary>
+    public static void RemoveUnusedOptionSets(ParsedModel model)
+    {
+        var referenced = model.tables
+            .SelectMany(table => table.Rows)
+            .Select(row => row.OptionSetName)
+            .Where(name => !string.IsNullOrEmpty(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        model.optionSets.RemoveAll(optionSet => !referenced.Contains(optionSet.LocalizedName));
+    }
 }

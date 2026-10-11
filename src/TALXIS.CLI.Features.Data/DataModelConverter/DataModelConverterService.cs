@@ -28,7 +28,11 @@ public class DataModelConverterService
     /// once the conversion has succeeded.
     /// <paramref name="appUniqueName"/> narrows the model to the tables a model-driven app is
     /// built on; its app module is searched for under <paramref name="appSearchRoots"/>, or
-    /// under the inputs when none are given.
+    /// under the inputs when none are given. <paramref name="includeAttributes"/> keeps only
+    /// the columns matching one of its patterns, plus keys and the columns relationships use.
+    /// <paramref name="detail"/> of <see cref="DetailLevel.Minimal"/> narrows each table of the
+    /// app to the columns that files under the search roots refer to and returns the columns it
+    /// left out; the columns <paramref name="includeAttributes"/> names are then kept as well.
     /// </summary>
     /// <remarks>
     /// Input resolution order, for each input:
@@ -40,10 +44,12 @@ public class DataModelConverterService
     /// </list>
     /// Earlier inputs win where two declare the same attribute or option set label differently.
     /// </remarks>
-    public static void ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName = null, List<string>? appSearchRoots = null)
+    public static IReadOnlyList<DroppedColumn> ConvertModel(List<string> inputPaths, string targetFormat, string outputFilePath, string? appUniqueName = null, List<string>? appSearchRoots = null, IReadOnlyCollection<string>? includeAttributes = null, DetailLevel detail = DetailLevel.Full)
     {
         if (!SupportedFormats.Contains(targetFormat.ToLower()))
             throw new ArgumentException($"Unsupported target format '{targetFormat}'. Supported formats are: {string.Join(", ", SupportedFormats)}.");
+
+        ValidateDetail(detail, targetFormat, appUniqueName);
 
         if (inputPaths is null || inputPaths.Count == 0)
             throw new ArgumentException("At least one input path is required.");
@@ -75,10 +81,24 @@ public class DataModelConverterService
         ResolvedAppScope? appScope = null;
         if (!string.IsNullOrWhiteSpace(appUniqueName))
         {
-            appScope = AppScopeResolver.Resolve(appSearchRoots is { Count: > 0 } ? appSearchRoots : declarationFolders, appUniqueName);
+            var searchRoots = appSearchRoots is { Count: > 0 } ? appSearchRoots : declarationFolders;
+            appScope = AppScopeResolver.Resolve(searchRoots, appUniqueName);
+            appScope.Detail = detail;
+            appScope.SearchRoots.AddRange(searchRoots);
+            appScope.IncludeAttributes = includeAttributes ?? [];
         }
 
         var parsedModel = ParseModules(modules, appScope);
+
+        if (detail == DetailLevel.Full && includeAttributes != null && includeAttributes.Count > 0)
+        {
+            AttributeFilter.Apply(parsedModel, includeAttributes);
+
+            if (appScope != null)
+            {
+                AppScopeFilter.RemoveUnusedOptionSets(parsedModel);
+            }
+        }
 
         var resultString = targetFormat.ToLower() switch
         {
@@ -92,6 +112,20 @@ public class DataModelConverterService
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputFilePath))!);
         using var writer = new StreamWriter(outputFilePath);
         writer.Write(resultString);
+
+        return appScope?.DroppedColumns ?? [];
+    }
+
+    public static void ValidateDetail(DetailLevel detail, string targetFormat, string? appUniqueName)
+    {
+        if (detail != DetailLevel.Minimal) return;
+
+        if (string.IsNullOrWhiteSpace(appUniqueName))
+            throw new ArgumentException("--detail minimal narrows the tables of one app, so it requires --app.");
+
+        if (!string.Equals(targetFormat, "dbml", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException(
+                "--detail minimal only supports --target dbml: a sql or edmx file made from a narrowed model would silently lack columns. Use --detail full for other targets.");
     }
 
     /// <summary>
@@ -280,22 +314,22 @@ public class DataModelConverterService
     public static ParsedModel ParseModelFolder(string folderPath)
         => ParseModules([ParseFolderIntoModule(folderPath)]);
 
-    private static string SolutionNameFromFolder(string folderPath)
+    private static XDocument? LoadManifest(string folderPath)
     {
         var manifestPath = Path.Combine(folderPath, "Other", "Solution.xml");
         if (!File.Exists(manifestPath))
         {
-            return string.Empty;
+            return null;
         }
 
         try
         {
-            return XDocument.Load(manifestPath).Descendants().FirstOrDefault(x => x.Name == "UniqueName")?.Value ?? string.Empty;
+            return XDocument.Load(manifestPath);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not read the solution name from {File}", manifestPath);
-            return string.Empty;
+            _logger.LogWarning(ex, "Could not read {File}", manifestPath);
+            return null;
         }
     }
 
@@ -323,7 +357,12 @@ public class DataModelConverterService
 
     private static Module ParseFolderIntoModule(string folderPath)
     {
-        Module module = new() { ModuleName = SolutionNameFromFolder(folderPath) };
+        var manifest = LoadManifest(folderPath);
+        Module module = new()
+        {
+            ModuleName = manifest?.Descendants().FirstOrDefault(x => x.Name == "UniqueName")?.Value ?? string.Empty,
+            CustomizationPrefix = manifest == null ? null : Module.PrefixFrom(manifest)
+        };
 
         // Get files named Entity.xml in subfolders
         // Ordered: Directory.GetFiles gives no ordering guarantee, so without this the
@@ -426,7 +465,12 @@ public class DataModelConverterService
             throw new FileNotFoundException("The solution archive does not contain the required customizations.xml or solution.xml files.");
         }
 
-        return new Module(XDocument.Load(solutionxml.Open()).Descendants().First(x => x.Name == "UniqueName").Value, XDocument.Load(customizationsxml.Open()));
+        var manifest = XDocument.Load(solutionxml.Open());
+
+        return new Module(manifest.Descendants().First(x => x.Name == "UniqueName").Value, XDocument.Load(customizationsxml.Open()))
+        {
+            CustomizationPrefix = Module.PrefixFrom(manifest)
+        };
     }
 
     public static ParsedModel ParseModules(List<Module> modules, ResolvedAppScope? appScope = null)
@@ -464,23 +508,25 @@ public class DataModelConverterService
 
         List<Relationship> EntityRelationships = ParseRelationships(modules, EntityTables, appScope);
 
-        if (appScope != null)
+        if (appScope is { Detail: DetailLevel.Minimal })
         {
-            var referenced = EntityTables
-                .SelectMany(table => table.Rows)
-                .Select(row => row.OptionSetName)
-                .Where(name => !string.IsNullOrEmpty(name))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            EntityOptionSets.RemoveAll(optionSet => !referenced.Contains(optionSet.LocalizedName));
+            var authorPrefixes = modules.Select(module => module.CustomizationPrefix).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+            AttributeReferenceFilter.Apply(EntityTables, EntityRelationships, appScope, authorPrefixes);
         }
 
-        return new ParsedModel()
+        var model = new ParsedModel()
         {
             tables = EntityTables,
             relationships = EntityRelationships,
             optionSets = EntityOptionSets
         };
+
+        if (appScope != null)
+        {
+            AppScopeFilter.RemoveUnusedOptionSets(model);
+        }
+
+        return model;
 
     }
 
@@ -493,8 +539,10 @@ public class DataModelConverterService
     {
         if (relationship.Element("EntityRelationshipType")?.Value == "ManyToMany")
         {
-            return appScope.TableLogicalNames.Contains(relationship.Element("FirstEntityName")?.Value ?? string.Empty)
-                || appScope.TableLogicalNames.Contains(relationship.Element("SecondEntityName")?.Value ?? string.Empty);
+            var firstInScope = appScope.TableLogicalNames.Contains(relationship.Element("FirstEntityName")?.Value ?? string.Empty);
+            var secondInScope = appScope.TableLogicalNames.Contains(relationship.Element("SecondEntityName")?.Value ?? string.Empty);
+
+            return appScope.Detail == DetailLevel.Minimal ? firstInScope && secondInScope : firstInScope || secondInScope;
         }
 
         return appScope.TableLogicalNames.Contains(relationship.Element("ReferencingEntityName")?.Value ?? string.Empty);

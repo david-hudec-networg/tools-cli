@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -21,8 +21,15 @@ public class Module
         optionsets = XmlDoc.Descendants().Where(x => x.Name == "optionset").ToList();
     }
 
+    public static string? PrefixFrom(XDocument solutionManifest)
+    {
+        var prefix = solutionManifest.Descendants().FirstOrDefault(x => x.Name == "CustomizationPrefix")?.Value.Trim();
+        return string.IsNullOrEmpty(prefix) ? null : prefix;
+    }
+
     public string ModuleName { get; set; } = "";
     public XDocument XmlDoc { get; set; } = new XDocument();
+    public string? CustomizationPrefix { get; set; }
 
     public List<XElement> entities = [];
     public List<XElement> relationships = [];
